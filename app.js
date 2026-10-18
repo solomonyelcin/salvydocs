@@ -246,11 +246,14 @@
   function applyTheme(t) { document.documentElement.dataset.theme = t; localStorage.setItem("dg-theme", t); }
 
   function wire() {
-    $("#signin").onclick = () => state.client.requestAccessToken({ prompt: "consent" });
-    $("#signout").onclick = () => {
+    // Always show Google's account chooser so any account can be picked.
+    $("#signin").onclick = () => state.client.requestAccessToken({ prompt: "select_account" });
+    const leave = () => {
       if (state.token) google.accounts.oauth2.revoke(state.token);
       sessionStorage.clear(); localStorage.removeItem("dg-signed-in"); cache.clear(); location.reload();
     };
+    $("#signout").onclick = leave;
+    $("#switch").onclick = leave; // returns to the sign-in screen, where the chooser opens
     document.querySelectorAll(".nav").forEach((b) => b.onclick = () => {
       state.view = b.dataset.view; state.query = ""; $("#search").value = "";
       if (state.view === "folders") state.stack = [{ id: "root", name: "My Drive" }];
