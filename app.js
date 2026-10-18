@@ -37,6 +37,7 @@
     if (!window.google || !google.accounts) return setTimeout(initAuth, 120);
     state.client = google.accounts.oauth2.initTokenClient({
       client_id: CFG.CLIENT_ID, scope: CFG.SCOPE,
+      hint: CFG.ALLOWED_EMAIL, // pre-selects the allowed account in Google's sign-in
       callback: (resp) => {
         if (resp.error) { toast("Sign-in failed: " + resp.error); return; }
         setToken(resp.access_token, resp.expires_in);
@@ -71,14 +72,25 @@
     return r.json();
   }
 
+  // Sign out locally and show the sign-in screen with a message.
+  function deny(msg) {
+    if (state.token) google.accounts.oauth2.revoke(state.token);
+    state.token = null; sessionStorage.clear(); localStorage.removeItem("dg-signed-in"); cache.clear();
+    $("#app").hidden = true; $("#welcome").hidden = false;
+    const w = $("#config-warning"); w.textContent = msg; w.hidden = false;
+  }
+
   async function start() {
+    let me;
+    try { me = (await api("/about", { fields: "user(displayName,photoLink,emailAddress)" })).user; }
+    catch (e) { return deny("Couldn't verify the signed-in account. Please try again."); }
+    // Only the configured account may use this site.
+    if (!me.emailAddress || me.emailAddress.toLowerCase() !== CFG.ALLOWED_EMAIL.toLowerCase())
+      return deny("This gallery is private. Please sign in with " + CFG.ALLOWED_EMAIL + ".");
     $("#welcome").hidden = true; $("#app").hidden = false;
     applyLayout();
-    try {
-      const me = await api("/about", { fields: "user(displayName,photoLink,emailAddress)" });
-      $("#user").innerHTML = (me.user.photoLink ? `<img referrerpolicy="no-referrer" src="${me.user.photoLink}" alt="">` : "") + `<span></span>`;
-      $("#user span").textContent = me.user.displayName || me.user.emailAddress;
-    } catch (e) { /* non-fatal */ }
+    $("#user").innerHTML = (me.photoLink ? `<img referrerpolicy="no-referrer" src="${me.photoLink}" alt="">` : "") + `<span></span>`;
+    $("#user span").textContent = me.displayName || me.emailAddress;
     load(true);
   }
 
@@ -246,14 +258,11 @@
   function applyTheme(t) { document.documentElement.dataset.theme = t; localStorage.setItem("dg-theme", t); }
 
   function wire() {
-    // Always show Google's account chooser so any account can be picked.
-    $("#signin").onclick = () => state.client.requestAccessToken({ prompt: "select_account" });
-    const leave = () => {
+    $("#signin").onclick = () => state.client.requestAccessToken();
+    $("#signout").onclick = () => {
       if (state.token) google.accounts.oauth2.revoke(state.token);
       sessionStorage.clear(); localStorage.removeItem("dg-signed-in"); cache.clear(); location.reload();
     };
-    $("#signout").onclick = leave;
-    $("#switch").onclick = leave; // returns to the sign-in screen, where the chooser opens
     document.querySelectorAll(".nav").forEach((b) => b.onclick = () => {
       state.view = b.dataset.view; state.query = ""; $("#search").value = "";
       if (state.view === "folders") state.stack = [{ id: "root", name: "My Drive" }];
