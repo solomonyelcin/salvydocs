@@ -2,66 +2,180 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Salvius Memories</title>
 <meta name="description" content="Photos, videos and documents from Salvius Memories.">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%236d5efc'/%3E%3Ccircle cx='36' cy='38' r='9' fill='%23fff'/%3E%3Cpath d='M14 78l26-28 16 16 12-12 18 24z' fill='%23fff'/%3E%3C/svg%3E">
+<meta name="theme-color" content="#eef2f3" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#07121c" media="(prefers-color-scheme: dark)">
+<meta property="og:title" content="Salvius Memories">
+<meta property="og:description" content="Photos, videos and documents from Salvius Memories.">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231b5b8f'/%3E%3Crect x='14' y='14' width='36' height='36' rx='4' fill='none' stroke='%23fff' stroke-width='4'/%3E%3Crect x='24' y='24' width='16' height='16' rx='2' fill='%23fff'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Public+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<script>
+  try { var t = localStorage.getItem("dg-theme"); if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"; document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
-<div id="app" class="app">
-  <main class="main">
-    <header class="topbar">
-      <div class="title"><span class="dot"></span><span id="site-title">Salvius Memories</span></div>
-      <form id="search-form" class="search" role="search">
-        <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
-        <input id="search" type="search" placeholder="Search this folder  ( press / )" autocomplete="off">
-      </form>
-      <div class="tools">
-        <select id="sort" aria-label="Sort">
-          <option value="name">Name</option>
-          <option value="modifiedTime desc">Newest</option>
-          <option value="modifiedTime">Oldest</option>
-        </select>
-        <div class="seg" role="group" aria-label="Layout">
-          <button id="layout-grid" class="icon-btn active" aria-label="Grid"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg></button>
-          <button id="layout-list" class="icon-btn" aria-label="List"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
-        </div>
-        <button id="theme" class="icon-btn" aria-label="Toggle theme"><svg viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 019.5 4 8 8 0 1020 14.5z"/></svg></button>
-      </div>
-    </header>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <symbol id="i-mark" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="3"/><rect x="8" y="8" width="8" height="8" rx="1.5"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h8M18 7h2M4 17h2M12 17h8"/><circle cx="15" cy="7" r="2.2"/><circle cx="9" cy="17" r="2.2"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+  <symbol id="i-select" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3.5"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 019.5 4 8 8 0 1020 14.5z"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6L7 7M17 17l1.4 1.4M5.6 18.4L7 17M17 7l1.4-1.4"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M12 15l-4.5-4.5M12 15l4.5-4.5M5 19.5h14"/></symbol>
+  <symbol id="i-share" viewBox="0 0 24 24"><circle cx="18" cy="5.5" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="18.5" r="2.5"/><path d="M8.2 10.8l7.6-4M8.2 13.2l7.6 4"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1-1"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8h.01"/></symbol>
+  <symbol id="i-left" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></symbol>
+  <symbol id="i-right" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M9.5 6l6 6-6 6"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8.5 5v14M15.5 5v14" stroke-width="2.6"/></symbol>
+  <symbol id="i-expand" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="3"/><circle cx="9" cy="9" r="1.7"/><path d="M20.5 16l-5-5-8 8.5"/></symbol>
+  <symbol id="i-video" viewBox="0 0 24 24"><rect x="3.5" y="5.5" width="17" height="13" rx="3"/><path d="M10.5 9.5v5l4-2.5z"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M7 3.5h7l4.5 4.5v12.5H7z"/><path d="M14 3.5V8h4.5M10 13h5M10 16.5h5"/></symbol>
+  <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4.5h5.5V10M19.5 4.5L11 13M17.5 14v4.5a1 1 0 01-1 1h-10a1 1 0 01-1-1v-10a1 1 0 011-1H11"/></symbol>
+  <symbol id="i-mosaic" viewBox="0 0 24 24"><rect x="3" y="4" width="11" height="7" rx="1.5"/><rect x="16" y="4" width="5" height="7" rx="1.5"/><rect x="3" y="13" width="5" height="7" rx="1.5"/><rect x="10" y="13" width="11" height="7" rx="1.5"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M4 6.5h16M4 12h16M4 17.5h16"/></symbol>
+</svg>
 
-    <div class="chips" id="chips" role="group" aria-label="Filter by type">
-      <button class="chip active" data-filter="all">All</button>
-      <button class="chip" data-filter="photos">Photos</button>
-      <button class="chip" data-filter="videos">Videos</button>
-      <button class="chip" data-filter="docs">Documents</button>
-    </div>
+<a class="skip" href="#content">Skip to gallery</a>
 
-    <div class="crumbs" id="crumbs"></div>
-    <div id="status" class="status" hidden></div>
-    <div id="grid" class="grid"></div>
-    <div id="sentinel" class="sentinel"></div>
-  </main>
-</div>
-
-<!-- Viewer -->
-<div id="viewer" class="viewer" hidden>
-  <div class="viewer-bar">
-    <div class="viewer-title" id="v-title"></div>
-    <div class="viewer-actions">
-      <a id="v-open" class="btn ghost small" target="_blank" rel="noopener">Open in Drive</a>
-      <button id="v-close" class="icon-btn" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+<header class="bar" id="bar">
+  <div class="bar-in">
+    <a class="brand" id="brand" href="./" aria-label="Back to the start">
+      <span class="mark"><svg class="i"><use href="#i-mark"/></svg></span>
+      <span class="brand-name" id="site-title">Salvius Memories</span>
+    </a>
+    <form class="search" id="search-form" role="search" autocomplete="off">
+      <svg class="i"><use href="#i-search"/></svg>
+      <input id="search" type="search" enterkeyhint="search" placeholder="Search by name or date" aria-label="Search" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <button type="button" class="clear" id="search-clear" aria-label="Clear search" hidden><svg class="i"><use href="#i-x"/></svg></button>
+      <kbd id="kbd" aria-hidden="true">/</kbd>
+    </form>
+    <div class="actions">
+      <button class="icon-btn" id="btn-select" type="button" aria-pressed="false" aria-label="Select files" title="Select files"><svg class="i"><use href="#i-select"/></svg></button>
+      <button class="icon-btn" id="btn-filters" type="button" aria-haspopup="dialog" aria-label="Sort, filter and view" title="Sort, filter and view"><svg class="i"><use href="#i-sliders"/></svg><span class="dot" id="filters-dot" hidden></span></button>
+      <button class="icon-btn" id="btn-theme" type="button" aria-label="Switch light or dark theme" title="Switch theme"><svg class="i ic-moon"><use href="#i-moon"/></svg><svg class="i ic-sun"><use href="#i-sun"/></svg></button>
     </div>
   </div>
-  <button id="v-prev" class="nav-arrow left" aria-label="Previous"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
-  <div class="viewer-stage" id="v-stage"></div>
-  <button id="v-next" class="nav-arrow right" aria-label="Next"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
-  <div class="viewer-count" id="v-count"></div>
+</header>
+
+<main class="page" id="page">
+  <section class="hero" id="hero">
+    <div class="hero-text">
+      <nav class="crumbs" id="crumbs" aria-label="Breadcrumb" hidden></nav>
+      <h1 id="title">Salvius Memories</h1>
+      <p class="lede" id="lede"></p>
+      <p class="stats" id="stats" aria-live="polite"></p>
+      <div class="hero-actions">
+        <button class="btn primary" id="btn-slideshow" type="button" hidden><svg class="i"><use href="#i-play"/></svg>Play slideshow</button>
+        <button class="btn" id="btn-share" type="button"><svg class="i"><use href="#i-share"/></svg>Share</button>
+      </div>
+    </div>
+    <div class="reel" id="reel" aria-label="Recent photos" hidden></div>
+  </section>
+
+  <div class="tabs" id="tabs" role="group" aria-label="Show">
+    <button class="tab" type="button" data-type="all" aria-pressed="true">All <span class="n"></span></button>
+    <button class="tab" type="button" data-type="photos" aria-pressed="false">Photos <span class="n"></span></button>
+    <button class="tab" type="button" data-type="videos" aria-pressed="false">Videos <span class="n"></span></button>
+    <button class="tab" type="button" data-type="docs" aria-pressed="false">Documents <span class="n"></span></button>
+    <button class="tab" type="button" data-type="albums" aria-pressed="false">Albums <span class="n"></span></button>
+  </div>
+
+  <div class="active-row" id="active-row" hidden>
+    <div class="seg" id="scope" role="group" aria-label="Where to search" hidden>
+      <button type="button" data-scope="folder" aria-pressed="true">This album</button>
+      <button type="button" data-scope="all" aria-pressed="false">Everywhere</button>
+    </div>
+    <div class="tags" id="tags"></div>
+  </div>
+
+  <div id="status" class="status" role="status" hidden></div>
+  <div id="content" class="content" tabindex="-1"></div>
+  <div id="sentinel" class="sentinel" aria-hidden="true"></div>
+  <noscript><p class="status">This gallery needs JavaScript to load your files.</p></noscript>
+</main>
+
+<div class="selbar" id="selbar" hidden role="toolbar" aria-label="Selected files">
+  <span class="sel-count" id="sel-count">Nothing selected</span>
+  <button class="btn ghost" id="sel-all" type="button" aria-label="Select all"><span class="long">Select all</span><span class="short">All</span></button>
+  <button class="btn ghost" id="sel-link" type="button" aria-label="Copy links"><svg class="i"><use href="#i-link"/></svg><span class="lbl">Copy links</span></button>
+  <button class="btn primary" id="sel-dl" type="button"><svg class="i"><use href="#i-download"/></svg><span class="lbl">Download</span></button>
+  <button class="icon-btn" id="sel-done" type="button" aria-label="Done selecting"><svg class="i"><use href="#i-x"/></svg></button>
 </div>
 
-<div id="toast" class="toast" hidden></div>
+<div class="sheet" id="sheet" hidden>
+  <div class="sheet-bg" data-close></div>
+  <div class="sheet-panel" role="dialog" aria-modal="true" aria-labelledby="sheet-h">
+    <div class="sheet-head">
+      <h2 id="sheet-h">Sort, filter and view</h2>
+      <button class="icon-btn" type="button" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button>
+    </div>
+    <div class="field">
+      <label class="lbl" for="f-sort">Sort by</label>
+      <select id="f-sort">
+        <option value="new">Newest first</option>
+        <option value="old">Oldest first</option>
+        <option value="az">Name, A to Z</option>
+        <option value="za">Name, Z to A</option>
+      </select>
+    </div>
+    <div class="field">
+      <label class="lbl" for="f-date">Date</label>
+      <select id="f-date"></select>
+    </div>
+    <div class="field">
+      <span class="lbl" id="lay-l">Layout</span>
+      <div class="seg wide" id="f-layout" role="group" aria-labelledby="lay-l">
+        <button type="button" data-layout="mosaic" aria-pressed="true"><svg class="i"><use href="#i-mosaic"/></svg>Mosaic</button>
+        <button type="button" data-layout="grid" aria-pressed="false"><svg class="i"><use href="#i-grid"/></svg>Grid</button>
+        <button type="button" data-layout="list" aria-pressed="false"><svg class="i"><use href="#i-list"/></svg>List</button>
+      </div>
+    </div>
+    <div class="field">
+      <label class="lbl" for="f-size">Thumbnail size</label>
+      <input id="f-size" type="range" min="1" max="3" step="1" value="2">
+    </div>
+    <div class="sheet-foot">
+      <button class="btn ghost" id="f-reset" type="button">Reset</button>
+      <button class="btn primary" type="button" data-close>Done</button>
+    </div>
+  </div>
+</div>
+
+<div class="viewer" id="viewer" hidden role="dialog" aria-modal="true" aria-label="Viewer">
+  <div class="v-top">
+    <button class="vbtn" id="v-close" type="button" aria-label="Close viewer"><svg class="i"><use href="#i-x"/></svg></button>
+    <div class="v-title"><div class="v-name" id="v-name"></div><div class="v-sub" id="v-sub"></div></div>
+    <div class="v-actions">
+      <button class="vbtn hide-s" id="v-play" type="button" aria-label="Start slideshow" title="Slideshow (P)"><svg class="i"><use href="#i-play"/></svg></button>
+      <button class="vbtn" id="v-info" type="button" aria-label="Details" aria-pressed="false" title="Details (I)"><svg class="i"><use href="#i-info"/></svg></button>
+      <button class="vbtn" id="v-share" type="button" aria-label="Share" title="Share"><svg class="i"><use href="#i-share"/></svg></button>
+      <button class="vbtn" id="v-download" type="button" aria-label="Download" title="Download (D)"><svg class="i"><use href="#i-download"/></svg></button>
+      <button class="vbtn hide-s" id="v-full" type="button" aria-label="Full screen" title="Full screen (F)"><svg class="i"><use href="#i-expand"/></svg></button>
+    </div>
+  </div>
+  <div class="v-stage" id="v-stage"></div>
+  <button class="v-nav prev" id="v-prev" type="button" aria-label="Previous"><svg class="i"><use href="#i-left"/></svg></button>
+  <button class="v-nav next" id="v-next" type="button" aria-label="Next"><svg class="i"><use href="#i-right"/></svg></button>
+  <div class="v-strip" id="v-strip" aria-hidden="true"></div>
+  <aside class="v-panel" id="v-panel" hidden aria-label="Details"></aside>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
 <script src="config.js"></script>
 <script src="app.js"></script>

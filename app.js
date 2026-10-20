@@ -1,223 +1,924 @@
 (() => {
   "use strict";
-  const CFG = window.GALLERY_CONFIG;
-  const $ = (s) => document.querySelector(s);
+  const CFG = window.GALLERY_CONFIG || {};
+  const ROOT = { id: CFG.ROOT_FOLDER_ID, name: CFG.ROOT_NAME || "Gallery" };
   const API = "https://www.googleapis.com/drive/v3";
-  const FIELDS = "nextPageToken,files(id,name,mimeType,thumbnailLink,modifiedTime,size,webViewLink,videoMediaMetadata(durationMillis))";
   const FOLDER = "application/vnd.google-apps.folder";
+  const FILE_FIELDS = "id,name,mimeType,thumbnailLink,modifiedTime,size,webViewLink,parents,imageMediaMetadata(width,height,time,rotation),videoMediaMetadata(width,height,durationMillis)";
+  const LIST_FIELDS = "nextPageToken,files(" + FILE_FIELDS + ")";
+  const PAGE = 160;            // tiles drawn at a time while scrolling
+  const GAP = 4;
+  const TYPE_KEY = { folder: "albums", image: "photos", video: "videos", doc: "docs" };
+  const TYPES = ["all", "photos", "videos", "docs", "albums"];
+  const SORTS = ["new", "old", "az", "za"];
 
-  const state = {
-    stack: [{ id: CFG.ROOT_FOLDER_ID, name: CFG.ROOT_NAME }],
-    filter: "all", query: "", sort: "name", layout: localStorage.getItem("dg-layout") || "grid",
-    items: [], next: null, loading: false, gen: 0, viewIdx: -1, viewables: [],
+  const $ = (s, r = document) => r.querySelector(s);
+  const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : v; } catch { return d; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch { /* storage unavailable */ } },
   };
-  const cache = new Map();
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const clamp = (n, a, b) => Math.min(b, Math.max(a, n));
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const ic = (n) => `<svg class="i" aria-hidden="true"><use href="#i-${n}"/></svg>`;
+  const el = (tag, cls) => { const e = document.createElement(tag); if (cls) e.className = cls; return e; };
+  const coll = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+  const plural = (n, w) => `${n.toLocaleString()} ${w}${n === 1 ? "" : "s"}`;
 
-  /* ---------- helpers ---------- */
-  const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
-  const isFolder = (f) => f.mimeType === FOLDER;
-  const kind = (f) => isFolder(f) ? "folder" : f.mimeType.startsWith("image/") ? "image" : f.mimeType.startsWith("video/") ? "video" : "doc";
+  const S = {
+    path: [ROOT], items: [], done: false, error: null, started: false, sig: "",
+    type: "all", sort: store.get("dg-sort", "new"), date: "any", q: "", scope: "folder",
+    layout: store.get("dg-layout", "mosaic"), size: +store.get("dg-size", 2) || 2,
+    view: [], order: [], map: new Map(), counts: {}, sec: {}, multi: false,
+    shown: 0, groups: new Map(), secs: {}, gen: 0,
+    select: false, selected: new Map(),
+    index: null, indexing: null, indexCount: 0, reelKey: "",
+  };
+  S.size = clamp(Math.round(S.size), 1, 3);
+  if (!SORTS.includes(S.sort)) S.sort = "new";
+  if (!["mosaic", "grid", "list"].includes(S.layout)) S.layout = "mosaic";
+  const DEFAULT_SORT = S.sort;
+
+  /* ---------- formatting ---------- */
+  const fmtDate = (ms) => new Date(ms).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  const fmtDateLong = (ms) => new Date(ms).toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+  const fmtMonth = (ms) => new Date(ms).toLocaleDateString(undefined, { month: "long", year: "numeric" });
   const fmtSize = (b) => { b = +b; if (!b) return ""; const u = ["B", "KB", "MB", "GB"]; let i = 0; while (b >= 1024 && i < 3) { b /= 1024; i++; } return b.toFixed(b < 10 && i ? 1 : 0) + " " + u[i]; };
-  const fmtDate = (d) => new Date(d).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
-  const fmtDur = (ms) => { const s = Math.round(ms / 1000), m = Math.floor(s / 60); return m + ":" + String(s % 60).padStart(2, "0"); };
-  const toast = (msg) => { const t = $("#toast"); t.textContent = msg; t.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => (t.hidden = true), 3500); };
-  const sized = (url, s) => url.replace(/=s\d+/, "=s" + s);
-  const fallbackThumb = (id, w) => `https://drive.google.com/thumbnail?id=${id}&sz=w${w}`;
+  const fmtDur = (ms) => { const s = Math.round(ms / 1000), h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(s % 60).padStart(2, "0"); };
+  let toastTimer;
+  function toast(msg) { const t = $("#toast"); t.textContent = msg; t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => (t.hidden = true), 3800); }
 
-  const ICONS = {
-    folder: '<svg class="ico" viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>',
-    image: '<svg class="ico" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="1.6"/><path d="M21 16l-5-5-9 9"/></svg>',
-    video: '<svg class="ico" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M10 9.5v5l4.5-2.5z"/></svg>',
-    doc: '<svg class="ico" viewBox="0 0 24 24"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5M10 13h6M10 17h6"/></svg>',
+  /* ---------- file helpers ---------- */
+  function taken(f) {
+    let t = Date.parse(f.modifiedTime) || 0;
+    const m = (f.imageMediaMetadata?.time || "").match(/^(\d{4}):(\d\d):(\d\d) (\d\d):(\d\d):(\d\d)/);
+    if (m && +m[1] > 1990) { const d = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime(); if (!isNaN(d)) t = d; }
+    return t;
+  }
+  function aspect(f) {
+    const m = f.imageMediaMetadata || f.videoMediaMetadata;
+    if (m && m.width && m.height) {
+      let w = m.width, h = m.height;
+      if (f.imageMediaMetadata && (m.rotation === 1 || m.rotation === 3)) [w, h] = [h, w];
+      return clamp(w / h, 0.55, 2.2);
+    }
+    return f._k === "video" ? 16 / 9 : 1.5;
+  }
+  function prep(f) {
+    f._k = f.mimeType === FOLDER ? "folder" : f.mimeType.startsWith("image/") ? "image" : f.mimeType.startsWith("video/") ? "video" : "doc";
+    f._lc = f.name.toLowerCase();
+    f._t = taken(f);
+    f._ar = aspect(f);
+    f._size = +f.size || 0;
+    return f;
+  }
+  function docType(f) {
+    const m = f.mimeType;
+    if (m === "application/pdf") return "pdf";
+    if (/spreadsheet|excel|csv/.test(m)) return "sheet";
+    if (/presentation|powerpoint/.test(m)) return "slides";
+    if (/document|word|text\//.test(m)) return "doc";
+    return "file";
+  }
+  function docLabel(f) {
+    const m = f.mimeType;
+    if (m.includes("google-apps.document")) return "Doc";
+    if (m.includes("google-apps.spreadsheet")) return "Sheet";
+    if (m.includes("google-apps.presentation")) return "Slides";
+    const parts = f.name.split(".");
+    const e = parts.length > 1 ? parts.pop().toUpperCase() : "";
+    return e && e.length <= 5 ? e : (m.split("/").pop() || "File").slice(0, 5);
+  }
+  const sized = (url, px) => url.replace(/=s\d+.*$/, "=s" + px);
+  const driveThumb = (id, px) => `https://drive.google.com/thumbnail?id=${id}&sz=w${px}`;
+  const thumbSrc = (f, px) => (f.thumbnailLink ? sized(f.thumbnailLink, px) : driveThumb(f.id, px));
+  const dpr = () => Math.min(window.devicePixelRatio || 1, 2);
+  const bucket = (n) => [240, 360, 480, 640, 800, 1000, 1280].find((b) => b >= n) || 1280;
+
+  const EXPORTS = {
+    "application/vnd.google-apps.document": ["application/pdf", "pdf"],
+    "application/vnd.google-apps.spreadsheet": ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx"],
+    "application/vnd.google-apps.presentation": ["application/vnd.openxmlformats-officedocument.presentationml.presentation", "pptx"],
+    "application/vnd.google-apps.drawing": ["image/png", "png"],
   };
+  function downloadUrl(f) {
+    if (f.mimeType.startsWith("application/vnd.google-apps.")) {
+      const x = EXPORTS[f.mimeType];
+      return x ? `${API}/files/${f.id}/export?mimeType=${encodeURIComponent(x[0])}&key=${CFG.API_KEY}` : (f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`);
+    }
+    return `https://drive.usercontent.google.com/download?id=${f.id}&export=download&confirm=t`;
+  }
+  async function downloadFiles(list) {
+    if (!list.length) return;
+    if (list.length > 1) toast(`Starting ${list.length} downloads. If your browser asks, allow multiple downloads.`);
+    for (const f of list) {
+      const a = el("a"); a.href = downloadUrl(f); a.target = "_blank"; a.rel = "noopener"; a.download = f.name;
+      document.body.append(a); a.click(); a.remove();
+      if (list.length > 1) await sleep(700);
+    }
+  }
 
-  /* ---------- data (public folder, read with an API key, no sign-in) ---------- */
-  const configured = () => CFG.API_KEY && !CFG.API_KEY.startsWith("YOUR_");
-
-  async function list(params) {
-    const url = API + "/files?" + new URLSearchParams({ ...params, key: CFG.API_KEY });
-    const r = await fetch(url);
+  /* ---------- Drive API ---------- */
+  async function gget(path, params) {
+    const url = API + path + "?" + new URLSearchParams({ ...params, key: CFG.API_KEY });
+    let r;
+    for (let i = 0; i < 3; i++) {
+      r = await fetch(url);
+      if (r.status === 429 || r.status >= 500) { await sleep(500 * (i + 1)); continue; }
+      break;
+    }
     if (!r.ok) {
-      const msg = (await r.json().catch(() => ({}))).error?.message || r.statusText;
-      throw new Error(r.status === 403 || r.status === 404
-        ? "These files aren't available right now. Check that the folder is shared with “Anyone with the link” and the API key allows this site."
-        : msg);
+      const e = new Error(r.statusText); e.status = r.status;
+      if (r.status === 400) e.message = "The Google API key isn't valid. Check the key in config.js.";
+      else if (r.status === 403) e.message = "Google blocked this request. Check that the folder is shared with “Anyone with the link” and that the API key allows this website.";
+      else if (r.status === 404) e.message = "This album can't be found. It may have been moved or unshared.";
+      else e.message = "Couldn't reach Google Drive. Check your connection and try again.";
+      throw e;
     }
     return r.json();
   }
 
-  function buildQuery() {
-    const parent = state.stack.at(-1).id;
-    let q = `'${parent}' in parents and trashed=false`;
-    if (state.query) q += ` and name contains '${state.query.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
-    const f = "mimeType = '" + FOLDER + "'";
-    if (state.filter === "photos") q += ` and (mimeType contains 'image/' or ${f})`;
-    else if (state.filter === "videos") q += ` and (mimeType contains 'video/' or ${f})`;
-    else if (state.filter === "docs") q += ` and (mimeType = 'application/pdf' or mimeType contains 'document' or mimeType contains 'spreadsheet' or mimeType contains 'presentation' or mimeType contains 'text/' or mimeType contains 'officedocument' or mimeType = 'application/msword' or ${f})`;
-    return q;
+  const known = new Map([[ROOT.id, { id: ROOT.id, name: ROOT.name, parent: null }]]);
+  const folderCache = new Map();
+
+  async function fetchFolder(id, gen, onProgress) {
+    const c = folderCache.get(id);
+    if (c) { onProgress(c, true); return c; }
+    const items = []; let token = "";
+    do {
+      const data = await gget("/files", { q: `'${id}' in parents and trashed=false`, pageSize: 300, fields: LIST_FIELDS, pageToken: token });
+      for (const f of data.files || []) { prep(f); items.push(f); if (f._k === "folder") known.set(f.id, { id: f.id, name: f.name, parent: id }); }
+      token = data.nextPageToken || "";
+      if (gen !== S.gen) return null;
+      onProgress(items, !token);
+    } while (token);
+    folderCache.set(id, items);
+    return items;
   }
 
-  function orderBy() { return "folder," + (state.sort === "name" ? "name_natural" : state.sort); }
-
-  async function load(reset) {
-    if (reset) { state.gen++; state.items = []; state.next = null; state.loading = false; $("#grid").innerHTML = ""; renderCrumbs(); status(""); }
-    else if (!state.next || state.loading) return;
-    if (state.loading) return;
-    const gen = state.gen;
-    const key = JSON.stringify([buildQuery(), orderBy()]);
-    if (reset && cache.has(key)) {
-      const c = cache.get(key); state.items = c.items.slice(); state.next = c.next;
-      render(state.items); refreshViewables(); status(state.items.length ? "" : "Nothing here yet."); return;
-    }
-    state.loading = true; showSkeleton(reset);
-    try {
-      const data = await list({ q: buildQuery(), orderBy: orderBy(), pageSize: CFG.PAGE_SIZE, fields: FIELDS, pageToken: state.next || "" });
-      if (gen !== state.gen) return;
-      const fresh = data.files || [];
-      state.items = state.items.concat(fresh); state.next = data.nextPageToken || null;
-      cache.set(key, { items: state.items.slice(), next: state.next });
-      clearSkeleton(); render(fresh); refreshViewables();
-      status(state.items.length ? "" : (state.query ? "No matches in this folder." : "Nothing here yet."));
-    } catch (e) {
-      if (gen === state.gen) { clearSkeleton(); status(e.message); }
-    } finally { if (gen === state.gen) state.loading = false; }
-  }
-
-  function status(msg) { const s = $("#status"); s.textContent = msg; s.hidden = !msg; }
-  function showSkeleton(reset) { if (reset) { const g = $("#grid"); for (let i = 0; i < 12; i++) g.append(el("div", "skeleton")); } }
-  function clearSkeleton() { document.querySelectorAll(".skeleton").forEach((n) => n.remove()); }
-
-  /* ---------- render ---------- */
-  function render(files) {
-    const frag = document.createDocumentFragment();
-    for (const f of files) frag.append(card(f));
-    $("#grid").append(frag);
-  }
-
-  function card(f) {
-    const k = kind(f);
-    const c = el("button", "card " + k);
-    c.dataset.id = f.id;
-    const thumb = el("div", "thumb");
-    if (k !== "folder") {
-      const img = new Image(); img.loading = "lazy"; img.decoding = "async"; img.referrerPolicy = "no-referrer"; img.alt = "";
-      let tried = false;
-      img.onerror = () => { if (!tried) { tried = true; img.src = fallbackThumb(f.id, 400); } };
-      img.onload = () => img.classList.add("ok");
-      img.src = f.thumbnailLink ? sized(f.thumbnailLink, 400) : fallbackThumb(f.id, 400);
-      thumb.append(img);
-    }
-    thumb.insertAdjacentHTML("beforeend", ICONS[k]);
-    if (k === "video") {
-      thumb.insertAdjacentHTML("beforeend", '<div class="play"><i><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></i></div>');
-      const d = f.videoMediaMetadata?.durationMillis; if (d) thumb.append(el("span", "badge", fmtDur(+d)));
-    } else if (k === "doc") {
-      const ext = (f.name.split(".").pop() || "").toUpperCase();
-      if (ext.length <= 4 && ext !== f.name.toUpperCase()) thumb.append(el("span", "badge", ext));
-    }
-    const meta = el("div", "meta");
-    const n = el("div", "name"); n.textContent = f.name; n.title = f.name;
-    const s = el("div", "sub"); s.textContent = k === "folder" ? "Folder" : [fmtDate(f.modifiedTime), fmtSize(f.size)].filter(Boolean).join(" · ");
-    meta.append(n, s); c.append(thumb, meta);
-    c.addEventListener("click", () => open(f));
-    return c;
-  }
-
-  function renderCrumbs() {
-    const c = $("#crumbs"); c.innerHTML = "";
-    state.stack.forEach((s, i) => {
-      if (i === state.stack.length - 1) { const x = el("span", "cur"); x.textContent = s.name; c.append(x); }
-      else {
-        const b = el("button"); b.textContent = s.name;
-        b.onclick = () => { state.stack = state.stack.slice(0, i + 1); state.query = ""; $("#search").value = ""; load(true); };
-        c.append(b, el("span", "", "›"));
+  async function resolvePath(id) {
+    const chain = []; let cur = id;
+    for (let i = 0; i < 16; i++) {
+      let info = known.get(cur);
+      if (!info) {
+        const f = await gget("/files/" + cur, { fields: "id,name,mimeType,parents" });
+        if (f.mimeType !== FOLDER) throw new Error("not a folder");
+        info = { id: f.id, name: f.name, parent: f.parents?.[0] || null };
+        known.set(cur, info);
       }
+      chain.unshift({ id: info.id, name: info.id === ROOT.id ? ROOT.name : info.name });
+      if (cur === ROOT.id) return chain;
+      if (!info.parent) throw new Error("outside");
+      cur = info.parent;
+    }
+    throw new Error("too deep");
+  }
+
+  // Search everywhere: list every sub-folder once, then search the index in the browser.
+  function ensureIndex() {
+    if (S.index) return Promise.resolve(S.index);
+    if (S.indexing) return S.indexing;
+    S.indexing = (async () => {
+      const all = []; const names = new Map([[ROOT.id, ROOT.name]]); const queue = [ROOT.id];
+      while (queue.length && all.length < 10000) {
+        const batch = queue.splice(0, 15);
+        const q = `(${batch.map((i) => `'${i}' in parents`).join(" or ")}) and trashed=false`;
+        let token = "";
+        do {
+          const data = await gget("/files", { q, pageSize: 1000, fields: LIST_FIELDS, pageToken: token });
+          for (const f of data.files || []) { prep(f); all.push(f); if (f._k === "folder") { queue.push(f.id); names.set(f.id, f.name); known.set(f.id, { id: f.id, name: f.name, parent: f.parents?.[0] || null }); } }
+          token = data.nextPageToken || "";
+          S.indexCount = all.length; paintStatus();
+        } while (token && all.length < 10000);
+      }
+      S.index = { items: all, names };
+      return S.index;
+    })().then((x) => { render(); return x; }, (e) => { S.indexing = null; S.error = e.message; render(); });
+    return S.indexing;
+  }
+
+  /* ---------- covers for album cards ---------- */
+  const coverCache = new Map(); const coverQ = []; let coverBusy = 0;
+  const coverIO = "IntersectionObserver" in window ? new IntersectionObserver((en) => {
+    for (const x of en) if (x.isIntersecting) { coverIO.unobserve(x.target); loadCover(x.target); }
+  }, { rootMargin: "300px" }) : null;
+  function loadCover(a) {
+    const id = a.dataset.id;
+    if (coverCache.has(id)) { setCover(a, coverCache.get(id)); return; }
+    coverQ.push(a); pumpCovers();
+  }
+  function pumpCovers() {
+    while (coverBusy < 3 && coverQ.length) {
+      const a = coverQ.shift(); if (!a.isConnected) continue;
+      const id = a.dataset.id; coverBusy++;
+      gget("/files", { q: `'${id}' in parents and trashed=false and mimeType contains 'image/'`, pageSize: 1, fields: "files(id,thumbnailLink)" })
+        .then((d) => { const x = d.files?.[0]; return x ? (x.thumbnailLink ? sized(x.thumbnailLink, 640) : driveThumb(x.id, 640)) : null; })
+        .catch(() => null)
+        .then((u) => { coverCache.set(id, u); if (a.isConnected) setCover(a, u); })
+        .finally(() => { coverBusy--; pumpCovers(); });
+    }
+  }
+  function setCover(a, url) {
+    if (!url) return;
+    const cover = $(".cover", a); const img = new Image(); img.alt = ""; img.decoding = "async"; img.referrerPolicy = "no-referrer";
+    img.onload = () => img.classList.add("ok"); img.src = url; cover.prepend(img);
+  }
+
+  /* ---------- filtering ---------- */
+  function baseList() { return S.q && S.scope === "all" ? (S.index ? S.index.items : []) : S.items; }
+  function dateRange() {
+    const d = S.date, now = Date.now();
+    if (d === "7") return [now - 7 * 864e5, Infinity];
+    if (d === "30") return [now - 30 * 864e5, Infinity];
+    if (d === "365") return [now - 365 * 864e5, Infinity];
+    if (/^y\d{4}$/.test(d)) { const y = +d.slice(1); return [new Date(y, 0, 1).getTime(), new Date(y + 1, 0, 1).getTime()]; }
+    return null;
+  }
+  function searchText(f) {
+    // Lets people search by date too, for example "september" or "2026".
+    return f._lc + " " + new Date(f._t).toLocaleDateString("en", { month: "long", year: "numeric" }).toLowerCase();
+  }
+  function compute() {
+    const terms = S.q.toLowerCase().split(/\s+/).filter(Boolean);
+    const range = dateRange();
+    const counts = { all: 0, photos: 0, videos: 0, docs: 0, albums: 0 };
+    const out = []; const base = baseList();
+    S.map = new Map();
+    for (const f of base) {
+      S.map.set(f.id, f);
+      if (terms.length) { const hay = searchText(f); if (!terms.every((t) => hay.includes(t))) continue; }
+      if (range && (f._t < range[0] || f._t >= range[1])) continue;
+      counts.all++; counts[TYPE_KEY[f._k]]++;
+      if (S.type !== "all" && TYPE_KEY[f._k] !== S.type) continue;
+      out.push(f);
+    }
+    const cmp = {
+      new: (a, b) => b._t - a._t || coll.compare(a.name, b.name),
+      old: (a, b) => a._t - b._t || coll.compare(a.name, b.name),
+      az: (a, b) => coll.compare(a.name, b.name),
+      za: (a, b) => coll.compare(b.name, a.name),
+    }[S.sort];
+    out.sort(cmp);
+    const fo = [], me = [], dc = [];
+    for (const f of out) (f._k === "folder" ? fo : f._k === "doc" ? dc : me).push(f);
+    S.view = out; S.order = [...fo, ...me, ...dc];
+    S.sec = { folder: fo.length, media: me.length, doc: dc.length };
+    S.multi = (fo.length > 0) + (me.length > 0) + (dc.length > 0) > 1;
+    S.counts = counts;
+    S.mediaTitle = me.length && me.every((f) => f._k === "image") ? "Photos" : me.length && me.every((f) => f._k === "video") ? "Videos" : "Photos and videos";
+  }
+
+  /* ---------- rendering ---------- */
+  let renderTimer = 0;
+  function scheduleRender(ms = 220) { if (renderTimer) return; renderTimer = setTimeout(() => { renderTimer = 0; render(); }, ms); }
+
+  function render() {
+    clearTimeout(renderTimer); renderTimer = 0;
+    compute(); paintChrome();
+    const c = $("#content");
+    const keep = S.shown;
+    c.textContent = ""; S.secs = {}; S.groups = new Map(); S.shown = 0;
+    c.className = "content layout-" + S.layout + (S.multi || S.q ? "" : " no-heads");
+    applySizes();
+    paintStatus();
+    if (!S.order.length) return;
+    appendMore(Math.max(PAGE, keep));
+    watchSentinel();
+  }
+
+  function applySizes() {
+    const w = innerWidth, c = $("#content");
+    const tile = w < 640 ? [100, 128, 168] : w < 1024 ? [130, 168, 216] : [150, 196, 256];
+    c.style.setProperty("--tile", tile[S.size - 1] + "px");
+    c.style.setProperty("--album", (w < 640 ? [150, 170, 230] : [190, 230, 300])[S.size - 1] + "px");
+  }
+  function targetH() { const w = innerWidth; return (w < 640 ? [84, 108, 140] : w < 1024 ? [120, 156, 204] : [150, 200, 264])[S.size - 1]; }
+
+  function section(name, title, count) {
+    let s = S.secs[name]; if (s) return s;
+    const e = el("section", "sec sec-" + name);
+    e.innerHTML = `<div class="sec-h"><h2>${esc(title)}</h2><span class="c">${count.toLocaleString()}</span></div><div class="sec-body"></div>`;
+    $("#content").append(e);
+    return (S.secs[name] = { el: e, body: $(".sec-body", e) });
+  }
+
+  function appendMore(n) {
+    const end = Math.min(S.order.length, S.shown + n);
+    const touched = new Set();
+    for (let i = S.shown; i < end; i++) place(S.order[i], touched);
+    S.shown = end;
+    if (S.layout === "mosaic") for (const g of touched) layoutGroup(g);
+  }
+
+  function place(f, touched) {
+    if (f._k === "folder") {
+      const s = section("albums", "Albums", S.sec.folder); s.body.classList.add("albums");
+      s.body.append(albumEl(f)); return;
+    }
+    if (f._k === "doc") {
+      const s = section("docs", "Documents", S.sec.doc); s.body.classList.add("rows");
+      s.body.append(tileEl(f)); return;
+    }
+    const s = section("media", S.mediaTitle, S.sec.media);
+    const dated = S.sort === "new" || S.sort === "old";
+    const key = dated ? new Date(f._t).getFullYear() + "-" + new Date(f._t).getMonth() : "all";
+    let g = S.groups.get(key);
+    if (!g) {
+      const e = el("div", "grp " + S.layout);
+      if (dated) { const h = el("h3", "grp-h"); h.textContent = fmtMonth(f._t); e.append(h); }
+      const body = el("div", "grp-body" + (S.layout === "list" ? " rows" : "")); e.append(body);
+      s.body.append(e); g = { el: e, body, tiles: [] }; S.groups.set(key, g);
+    }
+    const t = tileEl(f);
+    g.tiles.push({ el: t, ar: f._ar });
+    if (S.layout === "mosaic") touched.add(g); else g.body.append(t);
+  }
+
+  function layoutGroup(g) {
+    const W = g.body.clientWidth; if (!W) return;
+    const H = targetH();
+    g.body.textContent = "";
+    let row = [], sum = 0;
+    const flush = (items, s, full) => {
+      const n = items.length, h = full ? (W - GAP * (n - 1)) / s : H;
+      const r = el("div", "row"); r.style.height = h.toFixed(2) + "px";
+      if (!full) r.style.maxWidth = (s * H + GAP * (n - 1)).toFixed(1) + "px";
+      for (const t of items) r.append(t.el);
+      g.body.append(r);
+    };
+    for (const t of g.tiles) {
+      row.push(t); sum += t.ar;
+      if (sum * H + GAP * (row.length - 1) >= W) { flush(row, sum, true); row = []; sum = 0; }
+    }
+    if (row.length) flush(row, sum, false);
+  }
+
+  function subline(f) {
+    const parts = [fmtDate(f._t)];
+    if (f._size && (f._k === "doc" || S.layout === "list")) parts.push(fmtSize(f._size));
+    if (S.q && S.scope === "all") {
+      const p = f.parents?.[0], n = S.index?.names.get(p);
+      if (n && p !== ROOT.id) parts.push("In " + n);
+    }
+    return parts;
+  }
+
+  function tileEl(f) {
+    const k = f._k, t = el("div", `tile k-${k}` + (k === "doc" ? " t-" + docType(f) : ""));
+    t.dataset.id = f.id; t.tabIndex = 0; t.setAttribute("role", "button");
+    t.setAttribute("aria-label", f.name + (k === "video" ? ", video" : ""));
+    t.style.setProperty("--ar", f._ar.toFixed(3));
+    if (S.selected.has(f.id)) t.classList.add("sel");
+    const th = el("div", "thumb");
+    const rows = k === "doc" || S.layout === "list";
+    const px = rows ? 160 : bucket(Math.max(targetH() * f._ar, targetH()) * dpr() * 1.15);
+    const img = new Image(); img.alt = ""; img.decoding = "async"; img.loading = "lazy"; img.referrerPolicy = "no-referrer";
+    let tries = 0;
+    img.onload = () => img.classList.add("ok");
+    img.onerror = () => { if (tries++ === 0) img.src = driveThumb(f.id, px); else img.remove(); };
+    img.src = thumbSrc(f, px);
+    th.append(img); th.insertAdjacentHTML("beforeend", `<span class="ph">${ic(k === "doc" ? "file" : k)}</span>`);
+    t.append(th);
+    let extra = "";
+    if (k === "video") {
+      extra += `<span class="play">${ic("play")}</span>`;
+      const d = f.videoMediaMetadata?.durationMillis; if (d) extra += `<span class="dur">${fmtDur(+d)}</span>`;
+    }
+    if (k === "doc") extra += `<span class="badge">${esc(docLabel(f))}</span>`;
+    extra += `<button class="chk" type="button" tabindex="-1" aria-label="Select ${esc(f.name)}">${ic("check")}</button>`;
+    extra += `<button class="dl" type="button" tabindex="-1" aria-label="Download ${esc(f.name)}">${ic("download")}</button>`;
+    extra += `<div class="meta"><div class="nm">${esc(f.name)}</div><div class="sb">${subline(f).map((x) => `<span>${esc(x)}</span>`).join("")}</div></div>`;
+    t.insertAdjacentHTML("beforeend", extra);
+    return t;
+  }
+
+  function albumEl(f) {
+    const a = el("div", "album"); a.dataset.id = f.id; a.tabIndex = 0; a.setAttribute("role", "button");
+    a.setAttribute("aria-label", "Open album " + f.name);
+    a.innerHTML = `<div class="cover"><span class="ph">${ic("folder")}</span></div><div class="cap"><strong>${esc(f.name)}</strong><small>${esc(fmtDate(f._t))}</small></div>`;
+    if (coverIO) coverIO.observe(a); else loadCover(a);
+    return a;
+  }
+
+  let sentinelIO;
+  function watchSentinel() {
+    const s = $("#sentinel");
+    if (!sentinelIO) sentinelIO = new IntersectionObserver((en) => {
+      if (en[0].isIntersecting && S.shown < S.order.length) { appendMore(PAGE); sentinelIO.unobserve(s); sentinelIO.observe(s); }
+    }, { rootMargin: "1400px" });
+    sentinelIO.unobserve(s); sentinelIO.observe(s);
+  }
+
+  /* ---------- hero, tabs, tags, status ---------- */
+  function paintChrome() {
+    const cur = S.path.at(-1), searching = !!S.q, filtering = S.date !== "any";
+    $("#title").textContent = cur.name;
+    document.title = cur.id === ROOT.id ? ROOT.name : `${cur.name} – ${ROOT.name}`;
+    $("#hero").classList.toggle("compact", searching || filtering);
+    $("#lede").textContent = cur.id === ROOT.id ? (CFG.TAGLINE || "Photos, videos and documents.") : "";
+    // breadcrumbs
+    const cr = $("#crumbs");
+    if (S.path.length > 1) {
+      cr.hidden = false; cr.textContent = "";
+      S.path.slice(0, -1).forEach((p, i) => {
+        const b = el("button"); b.type = "button"; b.textContent = p.name; b.dataset.i = i; cr.append(b);
+        cr.insertAdjacentHTML("beforeend", ic("chevron"));
+      });
+    } else cr.hidden = true;
+    // stats
+    const all = S.items; const c = { folder: 0, image: 0, video: 0, doc: 0 };
+    for (const f of all) c[f._k]++;
+    let text;
+    if (searching) text = `${plural(S.view.length, "result")} for “${S.q}” ${S.scope === "all" ? "in every album" : "in this album"}`;
+    else {
+      const parts = [];
+      if (c.folder) parts.push(plural(c.folder, "album")); if (c.image) parts.push(plural(c.image, "photo"));
+      if (c.video) parts.push(plural(c.video, "video")); if (c.doc) parts.push(plural(c.doc, "document"));
+      text = parts.join(", ") + (S.done ? "" : (parts.length ? ", " : "") + "loading more");
+      if (S.done && !parts.length) text = "";
+    }
+    $("#stats").textContent = text;
+    // tabs
+    for (const b of $$("#tabs .tab")) {
+      const t = b.dataset.type, n = S.counts[t] ?? 0;
+      b.setAttribute("aria-pressed", String(S.type === t));
+      $(".n", b).textContent = n ? n.toLocaleString() : "";
+      b.hidden = t !== "all" && n === 0 && S.type !== t;
+    }
+    // active filters
+    const tags = $("#tags"); tags.textContent = "";
+    const addTag = (label, fn) => { const b = el("button", "tag"); b.type = "button"; b.innerHTML = `${esc(label)}${ic("x")}`; b.setAttribute("aria-label", "Remove filter: " + label); b.onclick = fn; tags.append(b); };
+    if (filtering) addTag(dateLabel(S.date), () => { S.date = "any"; changed(); });
+    if (S.type !== "all" && (searching || filtering)) addTag(tabLabel(S.type), () => { S.type = "all"; changed(); });
+    if (tags.children.length) { const b = el("button", "tag clear-all"); b.type = "button"; b.textContent = "Clear all"; b.onclick = clearFilters; tags.append(b); }
+    $("#scope").hidden = !searching;
+    for (const b of $$("#scope button")) b.setAttribute("aria-pressed", String(b.dataset.scope === S.scope));
+    $("#active-row").hidden = !searching && !tags.children.length;
+    $("#filters-dot").hidden = S.date === "any" && S.sort === DEFAULT_SORT;
+    $("#btn-slideshow").hidden = !S.order.some((f) => f._k === "image");
+    $("#search-clear").hidden = !$("#search").value;
+    paintReel();
+  }
+  const tabLabel = (t) => ({ photos: "Photos", videos: "Videos", docs: "Documents", albums: "Albums" }[t] || "All");
+  function dateLabel(d) { return d === "7" ? "Last 7 days" : d === "30" ? "Last 30 days" : d === "365" ? "Last 12 months" : /^y\d{4}$/.test(d) ? d.slice(1) : "Any time"; }
+
+  function paintReel() {
+    const r = $("#reel");
+    const imgs = (!S.q && S.date === "any" && S.type === "all") ? S.items.filter((f) => f._k === "image").sort((a, b) => b._t - a._t).slice(0, 8) : [];
+    const key = imgs.map((f) => f.id).join(",");
+    if (!imgs.length) { r.hidden = true; S.reelKey = ""; return; }
+    r.hidden = false;
+    if (key === S.reelKey) return;
+    S.reelKey = key; r.textContent = ""; r.classList.remove("in");
+    imgs.forEach((f, i) => {
+      const b = el("button", "frame"); b.type = "button"; b.dataset.id = f.id; b.style.setProperty("--i", i);
+      b.setAttribute("aria-label", "Open " + f.name);
+      const im = new Image(); im.alt = ""; im.decoding = "async"; im.referrerPolicy = "no-referrer";
+      let tr = 0; im.onerror = () => { if (tr++ === 0) im.src = driveThumb(f.id, 400); };
+      im.src = thumbSrc(f, 400); b.append(im); r.append(b);
+    });
+    requestAnimationFrame(() => r.classList.add("in"));
+  }
+
+  function paintStatus() {
+    const st = $("#status");
+    let html = "";
+    if (S.error) html = `<p>${esc(S.error)}</p><button class="btn" type="button" id="retry">Try again</button>`;
+    else if (S.q && S.scope === "all" && !S.index) html = `<p>Searching every album${S.indexCount ? `, ${S.indexCount.toLocaleString()} files so far` : ""}…</p>`;
+    else if (!S.started || (!S.done && !S.items.length)) { st.hidden = true; $("#content").innerHTML = `<div class="skel" aria-hidden="true">${Array.from({ length: 14 }, (_, i) => `<i style="width:${[180, 140, 220, 160, 200, 120][i % 6]}px"></i>`).join("")}</div>`; return; }
+    else if (!S.order.length) {
+      const filtered = S.q || S.date !== "any" || S.type !== "all";
+      html = `<div class="empty">${ic("image")}<h2>${filtered ? "Nothing matches" : "This album is empty"}</h2><p>${filtered ? "Try a different word, or search every album instead." : "Photos, videos and documents added to this folder in Google Drive will show up here."}</p>${filtered ? `<button class="btn" type="button" id="clear-btn">Clear search and filters</button>` : ""}</div>`;
+    }
+    st.innerHTML = html; st.hidden = !html;
+  }
+
+  /* ---------- URL state ---------- */
+  const normHash = () => {
+    const p = new URLSearchParams(location.hash.replace(/^#/, ""));
+    const t = p.get("t"), s = p.get("s");
+    return { d: p.get("d") || ROOT.id, t: TYPES.includes(t) ? t : "all", q: (p.get("q") || "").slice(0, 120), s: SORTS.includes(s) ? s : DEFAULT_SORT, r: p.get("r") || "any", scope: p.get("in") === "all" ? "all" : "folder", f: p.get("f") };
+  };
+  const curSig = () => [S.path.at(-1).id, S.type, S.q, S.sort, S.date, S.q && S.scope === "all" ? "all" : "folder"].join("|");
+  function hashFor(o = {}) {
+    const p = new URLSearchParams(); const d = o.d ?? S.path.at(-1).id;
+    if (d !== ROOT.id) p.set("d", d);
+    if (S.type !== "all") p.set("t", S.type);
+    if (S.q) p.set("q", S.q);
+    if (S.sort !== DEFAULT_SORT) p.set("s", S.sort);
+    if (S.date !== "any") p.set("r", S.date);
+    if (S.q && S.scope === "all") p.set("in", "all");
+    if (o.f) p.set("f", o.f);
+    const s = p.toString();
+    return s ? "#" + s : location.pathname + location.search;
+  }
+  function syncUrl() { S.sig = curSig(); history.replaceState(null, "", hashFor(V.el.hidden ? {} : { f: V.list[V.idx]?.id })); }
+  function changed() { syncUrl(); render(); }
+  function clearFilters() { S.q = ""; S.date = "any"; S.type = "all"; $("#search").value = ""; changed(); }
+
+  async function applyHash() {
+    const h = normHash();
+    const sig = [h.d, h.t, h.q, h.s, h.r, h.q && h.scope === "all" ? "all" : "folder"].join("|");
+    if (sig !== S.sig || !S.started) {
+      const newFolder = h.d !== S.path.at(-1).id || !S.started;
+      S.sig = sig; S.type = h.t; S.q = h.q; S.sort = h.s; S.date = /^(any|7|30|365|y\d{4})$/.test(h.r) ? h.r : "any"; S.scope = h.scope;
+      $("#search").value = S.q;
+      if (newFolder) await loadFolder(h.d); else render();
+      S.started = true;
+      if (S.q && S.scope === "all") ensureIndex();
+    }
+    if (h.f) await openFromHash(h.f); else closeViewer(true);
+  }
+
+  async function loadFolder(id) {
+    const gen = ++S.gen;
+    S.error = null; S.items = []; S.done = false; S.shown = 0; S.started = true; S.reelKey = "";
+    let path;
+    try { path = await resolvePath(id); }
+    catch { if (id !== ROOT.id) { toast("That link isn't available. Showing the main album."); history.replaceState(null, "", location.pathname + location.search); } id = ROOT.id; path = [ROOT]; S.sig = ""; }
+    if (gen !== S.gen) return;
+    S.path = path; S.sig = curSig();
+    render();
+    await new Promise((resolve) => {
+      let first = true;
+      fetchFolder(id, gen, (items, done) => {
+        if (gen !== S.gen) return;
+        S.items = items; S.done = done;
+        if (first) { first = false; render(); resolve(); } else if (done) render(); else scheduleRender(350);
+      }).catch((e) => { if (gen === S.gen) { S.error = e.message; S.done = true; render(); } resolve(); });
     });
   }
 
-  function open(f) {
-    if (isFolder(f)) {
-      state.query = ""; $("#search").value = "";
-      state.stack.push({ id: f.id, name: f.name }); load(true); window.scrollTo({ top: 0 }); return;
-    }
-    refreshViewables();
-    openViewer(state.viewables.findIndex((x) => x.id === f.id));
+  function navigateTo(id) {
+    S.q = ""; S.type = "all"; S.date = "any"; $("#search").value = "";
+    history.pushState(null, "", hashFor({ d: id }));
+    window.scrollTo({ top: 0 });
+    return applyHash();
   }
+
+  /* ---------- sharing ---------- */
+  const baseUrl = () => location.origin + location.pathname;
+  function fileUrl(f) { const par = f.parents?.[0] || S.path.at(-1).id; return baseUrl() + "#" + new URLSearchParams({ ...(par !== ROOT.id ? { d: par } : {}), f: f.id }).toString(); }
+  function folderUrl(id) { return id === ROOT.id ? baseUrl() : baseUrl() + "#d=" + id; }
+  async function copyText(text) {
+    try { await navigator.clipboard.writeText(text); return true; } catch { /* fall back */ }
+    const ta = el("textarea"); ta.value = text; ta.style.cssText = "position:fixed;opacity:0"; document.body.append(ta); ta.select();
+    let ok = false; try { ok = document.execCommand("copy"); } catch { /* ignore */ } ta.remove(); return ok;
+  }
+  async function shareLink(url, title) {
+    if (navigator.share) { try { await navigator.share({ title, url }); return; } catch (e) { if (e.name === "AbortError") return; } }
+    toast((await copyText(url)) ? "Link copied" : "Couldn't copy the link. Copy it from the address bar.");
+  }
+
+  /* ---------- selection ---------- */
+  function updateSel() {
+    document.body.classList.toggle("selecting", S.select);
+    $("#selbar").hidden = !S.select;
+    const n = S.selected.size;
+    $("#sel-count").textContent = n ? `${n.toLocaleString()} selected` : "Select files";
+    $("#sel-dl").disabled = $("#sel-link").disabled = !n;
+    $("#sel-dl").style.opacity = $("#sel-link").style.opacity = n ? "" : ".5";
+    $("#btn-select").setAttribute("aria-pressed", String(S.select));
+  }
+  function toggleSel(f, node) {
+    if (S.selected.has(f.id)) S.selected.delete(f.id); else S.selected.set(f.id, f);
+    S.select = true;
+    (node || $(`[data-id="${CSS.escape(f.id)}"]`))?.classList.toggle("sel", S.selected.has(f.id));
+    updateSel();
+  }
+  function endSelect() { S.select = false; S.selected.clear(); $$(".tile.sel").forEach((t) => t.classList.remove("sel")); updateSel(); }
 
   /* ---------- viewer ---------- */
-  function refreshViewables() { state.viewables = state.items.filter((f) => !isFolder(f)); }
+  const V = { el: $("#viewer"), idx: -1, list: [], pushed: false, play: null, img: null, Z: { s: 1, x: 0, y: 0 }, opener: null, idle: 0, info: false };
+  const stage = $("#v-stage");
+  const inertEls = () => [$("#bar"), $("#page"), $("#selbar")];
 
-  function imageSrc(f) { return f.thumbnailLink ? sized(f.thumbnailLink, 2000) : fallbackThumb(f.id, 2000); }
+  function openById(id) {
+    const list = S.order.filter((f) => f._k !== "folder");
+    let i = list.findIndex((f) => f.id === id);
+    if (i < 0) { const f = S.map.get(id); if (!f) return; showViewer([f], 0); return; }
+    showViewer(list, i);
+  }
 
-  function openViewer(i) {
-    if (i < 0) return;
-    state.viewIdx = i; const f = state.viewables[i];
-    const v = $("#viewer"), stage = $("#v-stage"); v.hidden = false; document.body.style.overflow = "hidden";
-    $("#v-title").textContent = f.name; $("#v-count").textContent = `${i + 1} / ${state.viewables.length}`;
-    $("#v-open").href = f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`;
-    stage.innerHTML = "";
-    if (kind(f) === "image") {
-      const img = new Image(); img.alt = f.name; img.referrerPolicy = "no-referrer";
+  function showViewer(list, i, { push = true } = {}) {
+    V.list = list;
+    if (V.el.hidden) {
+      V.opener = document.activeElement; V.el.hidden = false; document.body.classList.add("lock");
+      inertEls().forEach((e) => (e.inert = true));
+      V.pushed = false;
+      if (push) { history.pushState(null, "", hashFor({ f: list[i].id })); V.pushed = true; }
+      $("#v-close").focus({ preventScroll: true });
+    }
+    go(i);
+  }
+
+  function closeViewer(fromPop) {
+    if (V.el.hidden) return;
+    stopPlay(); V.el.hidden = true; document.body.classList.remove("lock");
+    inertEls().forEach((e) => (e.inert = false));
+    stage.textContent = ""; V.img = null; $("#v-panel").hidden = true; V.info = false; $("#v-info").setAttribute("aria-pressed", "false");
+    if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+    clearTimeout(V.idle);
+    if (!fromPop) { if (V.pushed) { V.pushed = false; history.back(); } else history.replaceState(null, "", hashFor()); }
+    V.opener?.focus?.({ preventScroll: true });
+  }
+
+  function go(i) {
+    i = clamp(i, 0, V.list.length - 1); V.idx = i;
+    const f = V.list[i];
+    V.Z = { s: 1, x: 0, y: 0 };
+    stage.textContent = ""; stage.className = "v-stage"; V.img = null;
+    V.el.classList.toggle("frame", f._k !== "image"); V.el.classList.remove("idle");
+    if (f._k === "image") {
+      const img = new Image(); img.className = "v-img"; img.alt = f.name; img.draggable = false; img.referrerPolicy = "no-referrer";
+      const spin = el("div", "v-spin"); stage.append(spin);
       let step = 0;
+      img.onload = () => spin.remove();
       img.onerror = () => {
         step++;
-        if (step === 1) img.src = fallbackThumb(f.id, 2000);
+        if (step === 1) img.src = driveThumb(f.id, 2000);
         else if (step === 2) img.src = `${API}/files/${f.id}?alt=media&key=${CFG.API_KEY}`;
-        else toast("Couldn't load that image.");
+        else { spin.remove(); toast("This photo couldn't be loaded. Try Open in Drive from the details panel."); }
       };
-      img.src = imageSrc(f);
-      stage.append(img);
-      [i - 1, i + 1].forEach((j) => { const n = state.viewables[j]; if (n && kind(n) === "image") new Image().src = imageSrc(n); });
+      img.src = thumbSrc(f, 800);
+      const hi = new Image(); hi.referrerPolicy = "no-referrer";
+      hi.onload = () => { if (V.idx === i && V.img === img) img.src = hi.src; };
+      hi.src = thumbSrc(f, 2400);
+      stage.append(img); V.img = img;
+      for (const j of [i + 1, i - 1]) { const n = V.list[j]; if (n && n._k === "image") new Image().src = thumbSrc(n, 1600); }
     } else {
-      const fr = document.createElement("iframe");
-      fr.src = `https://drive.google.com/file/d/${f.id}/preview`; fr.allow = "autoplay; fullscreen"; fr.allowFullscreen = true;
+      const fr = el("iframe", "v-frame"); fr.src = `https://drive.google.com/file/d/${f.id}/preview`; fr.allow = "autoplay; fullscreen"; fr.allowFullscreen = true; fr.title = f.name;
       stage.append(fr);
+      const note = el("div", "v-note"); note.innerHTML = `Not loading? <a href="${esc(f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`)}" target="_blank" rel="noopener">Open in Drive</a>`;
+      stage.append(note);
     }
-    $("#v-prev").hidden = i === 0; $("#v-next").hidden = i === state.viewables.length - 1;
-    if (i >= state.viewables.length - 6 && state.next) load(false).then(() => { $("#v-next").hidden = state.viewIdx >= state.viewables.length - 1; });
+    $("#v-name").textContent = f.name;
+    $("#v-sub").textContent = `${i + 1} of ${V.list.length}, ${fmtDate(f._t)}`;
+    $("#v-prev").hidden = i === 0; $("#v-next").hidden = i === V.list.length - 1;
+    paintStrip(); if (V.info) paintInfo(f);
+    if (location.hash !== hashFor({ f: f.id }) && !V.el.hidden) history.replaceState(null, "", hashFor({ f: f.id }));
+    wake();
   }
 
-  const step = (d) => { const n = state.viewIdx + d; if (n >= 0 && n < state.viewables.length) openViewer(n); };
-  function closeViewer() { $("#viewer").hidden = true; $("#v-stage").innerHTML = ""; document.body.style.overflow = ""; }
+  function paintStrip() {
+    const st = $("#v-strip"); st.textContent = "";
+    if (innerWidth < 900) return;
+    const from = clamp(V.idx - 8, 0, Math.max(0, V.list.length - 17)), to = Math.min(V.list.length, from + 17);
+    for (let j = from; j < to; j++) {
+      const f = V.list[j], b = el("button", j === V.idx ? "cur" : ""); b.type = "button"; b.tabIndex = -1; b.dataset.i = j;
+      if (f._k === "image" || f.thumbnailLink) { const im = new Image(); im.alt = ""; im.referrerPolicy = "no-referrer"; im.src = thumbSrc(f, 120); b.append(im); } else b.innerHTML = ic(f._k === "video" ? "video" : "file");
+      st.append(b);
+    }
+  }
+
+  function paintInfo(f) {
+    const par = f.parents?.[0], folder = par && known.get(par)?.name;
+    const m = f.imageMediaMetadata || f.videoMediaMetadata;
+    const rows = [["Date", fmtDateLong(f._t)], ["Type", f._k === "image" ? (f.mimeType.split("/")[1] || "image").toUpperCase() : f._k === "video" ? "Video" : docLabel(f)]];
+    if (f._size) rows.push(["Size", fmtSize(f._size)]);
+    if (m?.width) rows.push(["Dimensions", `${m.width} × ${m.height}`]);
+    if (f.videoMediaMetadata?.durationMillis) rows.push(["Length", fmtDur(+f.videoMediaMetadata.durationMillis)]);
+    if (folder) rows.push(["Album", folder]);
+    $("#v-panel").innerHTML = `<h3>${esc(f.name)}</h3><dl>${rows.map(([a, b]) => `<dt>${esc(a)}</dt><dd>${esc(b)}</dd>`).join("")}</dl>
+      <div class="acts"><a class="btn sm" href="${esc(f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`)}" target="_blank" rel="noopener">${ic("external")}Open in Drive</a><button class="btn sm" type="button" id="p-copy">${ic("link")}Copy link</button></div>`;
+    $("#p-copy").onclick = async () => toast((await copyText(fileUrl(f))) ? "Link copied" : "Couldn't copy the link");
+  }
+
+  function step(d) { const n = V.idx + d; if (n >= 0 && n < V.list.length) go(n); }
+  function toggleInfo() { V.info = !V.info; $("#v-panel").hidden = !V.info; $("#v-info").setAttribute("aria-pressed", String(V.info)); if (V.info) paintInfo(V.list[V.idx]); wake(); }
+  function togglePlay() {
+    if (V.play) { stopPlay(); return; }
+    if (!V.list.some((f) => f._k === "image")) { toast("Slideshows play photos only."); return; }
+    V.play = setInterval(() => {
+      for (let k = 1; k <= V.list.length; k++) { const j = (V.idx + k) % V.list.length; if (V.list[j]._k === "image") { go(j); return; } }
+    }, 4000);
+    $("#v-play").innerHTML = ic("pause"); $("#v-play").setAttribute("aria-label", "Pause slideshow"); toast("Slideshow playing. Press P to pause.");
+  }
+  function stopPlay() { if (!V.play) return; clearInterval(V.play); V.play = null; $("#v-play").innerHTML = ic("play"); $("#v-play").setAttribute("aria-label", "Start slideshow"); }
+  function wake() {
+    V.el.classList.remove("idle"); clearTimeout(V.idle);
+    if (!V.el.classList.contains("frame") && !V.info) V.idle = setTimeout(() => V.el.classList.add("idle"), 3400);
+  }
+
+  async function openFromHash(fid) {
+    if (!V.el.hidden && V.list[V.idx]?.id === fid) return;
+    let f = S.map.get(fid);
+    if (!f) {
+      try {
+        f = prep(await gget("/files/" + fid, { fields: FILE_FIELDS }));
+        const par = f.parents?.[0];
+        if (f._k === "folder" || !par) throw new Error("bad");
+        await resolvePath(par);
+        if (par !== S.path.at(-1).id) { S.q = ""; S.type = "all"; S.date = "any"; await loadFolder(par); }
+        f = S.map.get(fid) || f;
+      } catch { toast("That link isn't available."); history.replaceState(null, "", hashFor()); return; }
+    }
+    const list = S.order.filter((x) => x._k !== "folder"); const i = list.findIndex((x) => x.id === fid);
+    if (i >= 0) showViewer(list, i, { push: false }); else showViewer([f], 0, { push: false });
+  }
+
+  // Zoom and pan: wheel, double-click, double-tap, pinch and drag; swipe to move between photos.
+  const applyZ = () => { if (!V.img) return; V.img.style.transform = `translate(${V.Z.x}px,${V.Z.y}px) scale(${V.Z.s})`; stage.classList.toggle("zoomed", V.Z.s > 1); };
+  function clampPan() {
+    const Z = V.Z, im = V.img; if (!im) return;
+    const mx = Math.max(0, (im.offsetWidth * Z.s - stage.clientWidth) / 2), my = Math.max(0, (im.offsetHeight * Z.s - stage.clientHeight) / 2);
+    Z.x = clamp(Z.x, -mx, mx); Z.y = clamp(Z.y, -my, my);
+  }
+  function zoomTo(s, cx, cy) {
+    const Z = V.Z; s = clamp(s, 1, 6); const k = s / Z.s;
+    Z.x = cx - (cx - Z.x) * k; Z.y = cy - (cy - Z.y) * k; Z.s = s;
+    if (s === 1) { Z.x = 0; Z.y = 0; } else clampPan();
+    applyZ();
+  }
+  const rel = (e) => { const r = stage.getBoundingClientRect(); return [e.clientX - r.left - r.width / 2, e.clientY - r.top - r.height / 2]; };
+  const ptrs = new Map(); let gest = null, lastTap = null, lastType = "mouse", tapTimer = 0;
+  const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+
+  stage.addEventListener("pointerdown", (e) => {
+    lastType = e.pointerType; if (!V.img) return;
+    try { stage.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (ptrs.size === 1) gest = { x0: e.clientX, y0: e.clientY, t0: Date.now(), zx: V.Z.x, zy: V.Z.y, moved: false };
+    else if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; gest = { pinch: true, d0: dist(a, b), s0: V.Z.s }; }
+  });
+  stage.addEventListener("pointermove", (e) => {
+    if (!ptrs.has(e.pointerId) || !gest) return;
+    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (gest.pinch && ptrs.size === 2) {
+      const [a, b] = [...ptrs.values()], r = stage.getBoundingClientRect();
+      zoomTo(gest.s0 * dist(a, b) / gest.d0, (a.x + b.x) / 2 - r.left - r.width / 2, (a.y + b.y) / 2 - r.top - r.height / 2);
+      return;
+    }
+    const dx = e.clientX - gest.x0, dy = e.clientY - gest.y0;
+    if (Math.abs(dx) + Math.abs(dy) > 8) gest.moved = true;
+    if (V.Z.s > 1 && gest.moved) { stage.classList.add("dragging"); V.Z.x = gest.zx + dx; V.Z.y = gest.zy + dy; clampPan(); applyZ(); }
+  });
+  const endPtr = (e) => {
+    if (!ptrs.has(e.pointerId)) return;
+    const g = gest, was = ptrs.size; ptrs.delete(e.pointerId);
+    stage.classList.remove("dragging");
+    if (was === 1 && g && !g.pinch) {
+      const dx = e.clientX - g.x0, dy = e.clientY - g.y0, dt = Date.now() - g.t0;
+      if (e.pointerType !== "mouse" && V.Z.s === 1 && g.moved) {
+        if (Math.abs(dx) > 50 && Math.abs(dx) > 1.4 * Math.abs(dy)) step(dx < 0 ? 1 : -1);
+        else if (dy > 90 && dy > 1.4 * Math.abs(dx)) closeViewer();
+      } else if (e.pointerType !== "mouse" && !g.moved && dt < 300) {
+        const now = Date.now();
+        if (lastTap && now - lastTap.t < 320 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 40) {
+          clearTimeout(tapTimer); lastTap = null; const [cx, cy] = rel(e); zoomTo(V.Z.s > 1 ? 1 : 2.6, cx, cy);
+        } else { lastTap = { t: now, x: e.clientX, y: e.clientY }; clearTimeout(tapTimer); tapTimer = setTimeout(() => { V.el.classList.toggle("idle"); }, 330); }
+      }
+    }
+    if (!ptrs.size) gest = null;
+  };
+  stage.addEventListener("pointerup", endPtr); stage.addEventListener("pointercancel", endPtr);
+  stage.addEventListener("dblclick", (e) => { if (!V.img || lastType !== "mouse") return; const [cx, cy] = rel(e); zoomTo(V.Z.s > 1 ? 1 : 2.6, cx, cy); });
+  stage.addEventListener("wheel", (e) => { if (!V.img) return; e.preventDefault(); const [cx, cy] = rel(e); zoomTo(V.Z.s * Math.exp(-e.deltaY * 0.0018), cx, cy); }, { passive: false });
+  V.el.addEventListener("pointermove", (e) => { if (e.pointerType === "mouse") wake(); });
 
   /* ---------- UI wiring ---------- */
-  function applyLayout() {
-    $("#grid").classList.toggle("list", state.layout === "list");
-    $("#layout-grid").classList.toggle("active", state.layout === "grid");
-    $("#layout-list").classList.toggle("active", state.layout === "list");
+  function applyTheme(t) { document.documentElement.dataset.theme = t; store.set("dg-theme", t); }
+
+  function openFilters() {
+    const dates = $("#f-date");
+    const years = [...new Set(baseList().map((f) => new Date(f._t).getFullYear()))].filter((y) => y > 1990).sort((a, b) => b - a);
+    dates.innerHTML = `<option value="any">Any time</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="365">Last 12 months</option>` + years.map((y) => `<option value="y${y}">${y}</option>`).join("");
+    dates.value = [...dates.options].some((o) => o.value === S.date) ? S.date : "any";
+    $("#f-sort").value = S.sort; $("#f-size").value = S.size;
+    $$("#f-layout button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.layout === S.layout)));
+    $("#sheet").hidden = false; $("#btn-filters").setAttribute("aria-expanded", "true"); $("#f-sort").focus();
   }
-  function applyTheme(t) { document.documentElement.dataset.theme = t; localStorage.setItem("dg-theme", t); }
+  function closeFilters() { $("#sheet").hidden = true; $("#btn-filters").setAttribute("aria-expanded", "false"); $("#btn-filters").focus(); }
 
   function wire() {
-    document.querySelectorAll(".chip").forEach((b) => b.onclick = () => {
-      state.filter = b.dataset.filter;
-      document.querySelectorAll(".chip").forEach((x) => x.classList.toggle("active", x === b));
-      load(true);
+    // delegated clicks in the gallery
+    const content = $("#content");
+    content.addEventListener("click", (e) => {
+      if (S.skipClick) { S.skipClick = false; return; }
+      const node = e.target.closest(".tile,.album"); if (!node) return;
+      const f = S.map.get(node.dataset.id); if (!f) return;
+      if (e.target.closest(".dl")) { downloadFiles([f]); return; }
+      if (f._k === "folder") { navigateTo(f.id); return; }
+      if (e.target.closest(".chk") || S.select) { toggleSel(f, node); return; }
+      openById(f.id);
     });
-    $("#search-form").onsubmit = (e) => { e.preventDefault(); state.query = $("#search").value.trim(); load(true); };
-    $("#search").addEventListener("input", (e) => { if (!e.target.value && state.query) { state.query = ""; load(true); } });
-    $("#sort").onchange = (e) => { state.sort = e.target.value; load(true); };
-    $("#layout-grid").onclick = () => { state.layout = "grid"; localStorage.setItem("dg-layout", "grid"); applyLayout(); };
-    $("#layout-list").onclick = () => { state.layout = "list"; localStorage.setItem("dg-layout", "list"); applyLayout(); };
-    $("#theme").onclick = () => applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
-    $("#v-close").onclick = closeViewer; $("#v-prev").onclick = () => step(-1); $("#v-next").onclick = () => step(1);
-    $("#viewer").addEventListener("click", (e) => { if (e.target.id === "v-stage") closeViewer(); });
+    content.addEventListener("keydown", (e) => {
+      const node = e.target.closest(".tile,.album"); if (!node || e.target !== node) return;
+      const f = S.map.get(node.dataset.id); if (!f) return;
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); if (f._k === "folder") navigateTo(f.id); else if (S.select) toggleSel(f, node); else openById(f.id); }
+      else if ((e.key === "s" || e.key === "S") && f._k !== "folder") toggleSel(f, node);
+    });
+    // long-press to start selecting on touch screens
+    let lp = null;
+    content.addEventListener("pointerdown", (e) => {
+      if (e.pointerType === "mouse") return;
+      const node = e.target.closest(".tile"); if (!node) return;
+      const f = S.map.get(node.dataset.id); if (!f) return;
+      lp = { x: e.clientX, y: e.clientY, timer: setTimeout(() => { S.skipClick = true; toggleSel(f, node); navigator.vibrate?.(15); }, 480) };
+    });
+    const cancelLp = () => { if (lp) { clearTimeout(lp.timer); lp = null; } };
+    content.addEventListener("pointermove", (e) => { if (lp && Math.hypot(e.clientX - lp.x, e.clientY - lp.y) > 8) cancelLp(); });
+    content.addEventListener("pointerup", cancelLp); content.addEventListener("pointercancel", cancelLp);
+    content.addEventListener("contextmenu", (e) => { if (e.target.closest(".tile") && e.pointerType !== "mouse") e.preventDefault(); });
 
+    $("#status").addEventListener("click", (e) => {
+      if (e.target.closest("#retry")) { folderCache.delete(S.path.at(-1).id); S.index = null; S.indexing = null; loadFolder(S.path.at(-1).id); }
+      if (e.target.closest("#clear-btn")) clearFilters();
+    });
+    $("#reel").addEventListener("click", (e) => { const b = e.target.closest(".frame"); if (b) openById(b.dataset.id); });
+    $("#crumbs").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) navigateTo(S.path[+b.dataset.i].id); });
+    $("#brand").addEventListener("click", (e) => { if (e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); S.q = ""; S.type = "all"; S.date = "any"; $("#search").value = ""; history.pushState(null, "", location.pathname + location.search); window.scrollTo({ top: 0 }); applyHash(); });
+
+    // search
+    let st;
+    $("#search").addEventListener("input", () => {
+      $("#search-clear").hidden = !$("#search").value; clearTimeout(st);
+      st = setTimeout(() => { S.q = $("#search").value.trim(); syncUrl(); if (S.q && S.scope === "all") ensureIndex(); render(); }, 160);
+    });
+    $("#search-form").addEventListener("submit", (e) => { e.preventDefault(); $("#search").blur(); });
+    $("#search-clear").onclick = () => { $("#search").value = ""; S.q = ""; changed(); $("#search").focus(); };
+    $("#scope").addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; S.scope = b.dataset.scope; syncUrl(); if (S.scope === "all") ensureIndex(); render(); });
+
+    // tabs
+    $("#tabs").addEventListener("click", (e) => { const b = e.target.closest(".tab"); if (!b) return; S.type = b.dataset.type; changed(); });
+
+    // hero actions
+    $("#btn-share").onclick = () => shareLink(folderUrl(S.path.at(-1).id), S.path.at(-1).name);
+    $("#btn-slideshow").onclick = () => {
+      const list = S.order.filter((f) => f._k !== "folder"); const i = list.findIndex((f) => f._k === "image"); if (i < 0) return;
+      showViewer(list, i); if (!V.play) togglePlay();
+    };
+
+    // top bar
+    $("#btn-theme").onclick = () => applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
+    $("#btn-select").onclick = () => { if (S.select) endSelect(); else { S.select = true; updateSel(); } };
+    $("#btn-filters").onclick = () => ($("#sheet").hidden ? openFilters() : closeFilters());
+    $$("#sheet [data-close]").forEach((b) => (b.onclick = closeFilters));
+    $("#f-sort").onchange = (e) => { S.sort = e.target.value; store.set("dg-sort", S.sort); changed(); };
+    $("#f-date").onchange = (e) => { S.date = e.target.value; changed(); };
+    $("#f-size").oninput = (e) => { S.size = +e.target.value; store.set("dg-size", S.size); render(); };
+    $("#f-layout").addEventListener("click", (e) => {
+      const b = e.target.closest("button"); if (!b) return; S.layout = b.dataset.layout; store.set("dg-layout", S.layout);
+      $$("#f-layout button").forEach((x) => x.setAttribute("aria-pressed", String(x === b))); S.shown = 0; render();
+    });
+    $("#f-reset").onclick = () => { S.sort = "new"; S.date = "any"; S.size = 2; S.layout = "mosaic"; store.set("dg-sort", "new"); store.set("dg-size", 2); store.set("dg-layout", "mosaic"); S.shown = 0; changed(); openFilters(); };
+
+    // selection bar
+    $("#sel-done").onclick = endSelect;
+    $("#sel-all").onclick = () => { for (const f of S.order) if (f._k !== "folder") { S.selected.set(f.id, f); } $$(".tile").forEach((t) => t.classList.toggle("sel", S.selected.has(t.dataset.id))); updateSel(); };
+    $("#sel-dl").onclick = () => downloadFiles([...S.selected.values()]);
+    $("#sel-link").onclick = async () => { const urls = [...S.selected.values()].map(fileUrl).join("\n"); toast((await copyText(urls)) ? `Copied ${plural(S.selected.size, "link")}` : "Couldn't copy the links"); };
+
+    // viewer
+    $("#v-close").onclick = () => closeViewer();
+    $("#v-prev").onclick = () => step(-1); $("#v-next").onclick = () => step(1);
+    $("#v-info").onclick = toggleInfo; $("#v-play").onclick = togglePlay;
+    $("#v-share").onclick = () => { const f = V.list[V.idx]; shareLink(fileUrl(f), f.name); };
+    $("#v-download").onclick = () => downloadFiles([V.list[V.idx]]);
+    if (document.fullscreenEnabled) { $("#v-full").onclick = () => (document.fullscreenElement ? document.exitFullscreen() : V.el.requestFullscreen().catch(() => {})); } else $("#v-full").hidden = true;
+    $("#v-strip").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) go(+b.dataset.i); });
+
+    // keyboard
     document.addEventListener("keydown", (e) => {
-      if (!$("#viewer").hidden) {
-        if (e.key === "Escape") closeViewer();
+      const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName);
+      if (!V.el.hidden) {
+        if (e.key === "Escape") { if (!document.fullscreenElement) closeViewer(); }
         else if (e.key === "ArrowLeft") step(-1);
         else if (e.key === "ArrowRight") step(1);
-      } else if (e.key === "/" && document.activeElement !== $("#search")) { e.preventDefault(); $("#search").focus(); }
+        else if (e.key === "i" || e.key === "I") toggleInfo();
+        else if (e.key === "p" || e.key === "P") togglePlay();
+        else if (e.key === "d" || e.key === "D") downloadFiles([V.list[V.idx]]);
+        else if ((e.key === "f" || e.key === "F") && document.fullscreenEnabled) $("#v-full").click();
+        else if (e.key === "+" || e.key === "=") zoomTo(V.Z.s * 1.4, 0, 0);
+        else if (e.key === "-") zoomTo(V.Z.s / 1.4, 0, 0);
+        else if (e.key === "0") zoomTo(1, 0, 0);
+        wake(); return;
+      }
+      if (e.key === "Escape") {
+        if (!$("#sheet").hidden) closeFilters();
+        else if (typing && document.activeElement.id === "search") { if ($("#search").value) $("#search-clear").click(); else $("#search").blur(); }
+        else if (S.select) endSelect();
+      } else if (!typing && (e.key === "/" || ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k"))) { e.preventDefault(); $("#search").focus(); $("#search").select(); }
     });
 
-    new IntersectionObserver((en) => { if (en[0].isIntersecting && state.next && !state.loading) load(false); }, { rootMargin: "800px" }).observe($("#sentinel"));
+    // chrome behaviour
+    const bar = $("#bar"); const onScroll = () => bar.classList.toggle("stuck", scrollY > 6); addEventListener("scroll", onScroll, { passive: true }); onScroll();
+    let lastW = 0;
+    if ("ResizeObserver" in window) new ResizeObserver(() => {
+      const w = content.clientWidth; if (!w || w === lastW) return; lastW = w;
+      applySizes(); if (S.layout === "mosaic") for (const g of S.groups.values()) layoutGroup(g);
+    }).observe(content);
+    addEventListener("popstate", () => applyHash());
+    document.addEventListener("fullscreenchange", () => { $("#v-full").setAttribute("aria-label", document.fullscreenElement ? "Exit full screen" : "Full screen"); });
   }
 
   /* ---------- boot ---------- */
-  applyTheme(localStorage.getItem("dg-theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
-  document.title = CFG.ROOT_NAME; $("#site-title").textContent = CFG.ROOT_NAME;
-  applyLayout(); wire();
-  if (!configured()) { renderCrumbs(); status("Add the Google API key to config.js to show the files."); }
-  else load(true);
+  function boot() {
+    $("#site-title").textContent = ROOT.name; document.title = ROOT.name; $("#title").textContent = ROOT.name;
+    wire(); updateSel();
+    if (!CFG.API_KEY || CFG.API_KEY.startsWith("YOUR_")) { S.started = true; S.done = true; S.error = "Add the Google API key to config.js to show the files."; render(); return; }
+    applyHash();
+  }
+  boot();
 })();
