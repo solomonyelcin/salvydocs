@@ -590,9 +590,11 @@
   function endSelect() { S.select = false; S.selected.clear(); $$(".tile.sel").forEach((t) => t.classList.remove("sel")); updateSel(); }
 
   /* ---------- viewer ---------- */
-  const V = { el: $("#viewer"), idx: -1, list: [], pushed: false, play: null, img: null, Z: { s: 1, x: 0, y: 0 }, opener: null, idle: 0, info: false };
+  const V = { el: $("#viewer"), idx: -1, list: [], pushed: false, play: null, img: null, vid: null, mode: "", Z: { s: 1, x: 0, y: 0 }, fit: { w: 0, h: 0, cx: 0, cy: 0 }, nat: { w: 0, h: 0 }, maxS: 6, big: false, opener: null, idle: 0, info: false, cleanup: null };
   const stage = $("#v-stage");
   const inertEls = () => [$("#bar"), $("#page"), $("#selbar")];
+  const mediaUrl = (f) => `${API}/files/${f.id}?alt=media&key=${CFG.API_KEY}`;
+  const driveView = (f) => f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`;
 
   function openById(id) {
     const list = S.order.filter((f) => f._k !== "folder");
@@ -613,52 +615,300 @@
     go(i);
   }
 
+  function teardown() {
+    if (V.vid) { try { V.vid.pause(); V.vid.removeAttribute("src"); V.vid.load(); } catch { /* ignore */ } }
+    V.cleanup?.(); V.cleanup = null; V.vid = null; V.img = null;
+    stage.textContent = ""; stage.className = "v-stage";
+  }
+
   function closeViewer(fromPop) {
     if (V.el.hidden) return;
     stopPlay(); V.el.hidden = true; document.body.classList.remove("lock");
     inertEls().forEach((e) => (e.inert = false));
-    stage.textContent = ""; V.img = null; $("#v-panel").hidden = true; V.info = false; $("#v-info").setAttribute("aria-pressed", "false");
+    teardown(); $("#v-panel").hidden = true; V.info = false; $("#v-info").setAttribute("aria-pressed", "false");
     if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
     clearTimeout(V.idle);
     if (!fromPop) { if (V.pushed) { V.pushed = false; history.back(); } else history.replaceState(null, "", hashFor()); }
     V.opener?.focus?.({ preventScroll: true });
   }
 
+  function setMode(mode) {
+    V.mode = mode;
+    V.el.classList.toggle("img", mode === "img"); V.el.classList.toggle("vid", mode === "vid"); V.el.classList.toggle("frame", mode === "frame");
+    V.el.classList.remove("idle");
+  }
+
   function go(i) {
     i = clamp(i, 0, V.list.length - 1); V.idx = i;
     const f = V.list[i];
-    V.Z = { s: 1, x: 0, y: 0 };
-    stage.textContent = ""; stage.className = "v-stage"; V.img = null;
-    V.el.classList.toggle("frame", f._k !== "image"); V.el.classList.remove("idle");
-    if (f._k === "image") {
-      const img = new Image(); img.className = "v-img"; img.alt = f.name; img.draggable = false; img.referrerPolicy = "no-referrer";
-      const spin = el("div", "v-spin"); stage.append(spin);
-      let step = 0;
-      img.onload = () => spin.remove();
-      img.onerror = () => {
-        step++;
-        if (step === 1) img.src = driveThumb(f.id, 2000);
-        else if (step === 2) img.src = `${API}/files/${f.id}?alt=media&key=${CFG.API_KEY}`;
-        else { spin.remove(); toast("This photo couldn't be loaded. Try Open in Drive from the details panel."); }
-      };
-      img.src = thumbSrc(f, 800);
-      const hi = new Image(); hi.referrerPolicy = "no-referrer";
-      hi.onload = () => { if (V.idx === i && V.img === img) img.src = hi.src; };
-      hi.src = thumbSrc(f, 2400);
-      stage.append(img); V.img = img;
-      for (const j of [i + 1, i - 1]) { const n = V.list[j]; if (n && n._k === "image") new Image().src = thumbSrc(n, 1600); }
-    } else {
-      const fr = el("iframe", "v-frame"); fr.src = `https://drive.google.com/file/d/${f.id}/preview`; fr.allow = "autoplay; fullscreen"; fr.allowFullscreen = true; fr.title = f.name;
-      stage.append(fr);
-      const note = el("div", "v-note"); note.innerHTML = `Not loading? <a href="${esc(f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`)}" target="_blank" rel="noopener">Open in Drive</a>`;
-      stage.append(note);
-    }
+    teardown(); V.Z = { s: 1, x: 0, y: 0 }; V.big = false;
+    setMode(f._k === "image" ? "img" : f._k === "video" ? "vid" : "frame");
+    if (V.mode === "img") mountImage(f, i); else if (V.mode === "vid") mountVideo(f); else mountFrame(f);
     $("#v-name").textContent = f.name;
     $("#v-sub").textContent = `${i + 1} of ${V.list.length}, ${fmtDate(f._t)}`;
     $("#v-prev").hidden = i === 0; $("#v-next").hidden = i === V.list.length - 1;
     paintStrip(); if (V.info) paintInfo(f);
     if (location.hash !== hashFor({ f: f.id }) && !V.el.hidden) history.replaceState(null, "", hashFor({ f: f.id }));
     wake();
+  }
+
+  /* ----- photos: fit to screen, zoom, pan ----- */
+  function mountImage(f, i) {
+    const img = new Image(); img.className = "v-img"; img.alt = f.name; img.draggable = false; img.referrerPolicy = "no-referrer";
+    const m = f.imageMediaMetadata; let nw = m?.width || 0, nh = m?.height || 0;
+    if (m && (m.rotation === 1 || m.rotation === 3)) [nw, nh] = [nh, nw];
+    V.nat = { w: nw, h: nh }; V.img = img;
+    const spin = el("div", "v-spin"); stage.append(spin, img);
+    let step = 0;
+    img.onload = () => { spin.remove(); fitImage(); };
+    img.onerror = () => {
+      step++;
+      if (step === 1) img.src = driveThumb(f.id, 2000);
+      else if (step === 2) img.src = mediaUrl(f);
+      else { spin.remove(); toast("This photo couldn't be loaded. Try Open in Drive from the details panel."); }
+    };
+    img.src = thumbSrc(f, 800);
+    const hi = new Image(); hi.referrerPolicy = "no-referrer";
+    hi.onload = () => { if (V.idx === i && V.img === img) img.src = hi.src; };
+    hi.src = thumbSrc(f, 2400);
+    for (const j of [i + 1, i - 1]) { const n = V.list[j]; if (n && n._k === "image") new Image().src = thumbSrc(n, 1600); }
+    fitImage(); paintZoom();
+  }
+
+  // Size the photo to fit inside the visible area, whatever its shape or the screen's shape.
+  function fitImage() {
+    const im = V.img; if (!im) return;
+    const SW = stage.clientWidth, SH = stage.clientHeight; if (!SW || !SH) return;
+    const ar = im.naturalWidth ? im.naturalWidth / im.naturalHeight : V.nat.w ? V.nat.w / V.nat.h : 0;
+    if (!ar) return;
+    const wide = SW >= 900, padT = wide ? 60 : 0, padB = wide ? 88 : 0, padX = wide ? 70 : 0;
+    const aw = Math.max(80, SW - 2 * padX), ah = Math.max(80, SH - padT - padB);
+    let w, h; if (aw / ah < ar) { w = aw; h = aw / ar; } else { h = ah; w = ah * ar; }
+    if (V.nat.w && w > V.nat.w * 2) { const k = (V.nat.w * 2) / w; w *= k; h *= k; } // never blow small photos up past 2x
+    w = Math.round(w); h = Math.round(h);
+    const left = Math.round((SW - w) / 2), top = Math.round(padT + (ah - h) / 2);
+    Object.assign(im.style, { width: w + "px", height: h + "px", left: left + "px", top: top + "px", visibility: "visible" });
+    V.fit = { w, h, cx: left + w / 2, cy: top + h / 2 };
+    V.maxS = clamp(V.nat.w ? (V.nat.w * 2) / w : 6, 4, 14);
+    clampPan(); applyZ();
+  }
+
+  function paintZoom() {
+    const z = V.Z.s, b = $("#v-zreset");
+    b.textContent = z < 1.02 ? "Fit" : Math.round(z * 100) + "%";
+    b.setAttribute("aria-label", z < 1.02 ? "Zoom to actual size" : "Fit to screen"); b.title = z < 1.02 ? "Actual size (0)" : "Fit to screen (0)";
+    $("#v-zout").disabled = z < 1.02; $("#v-zin").disabled = z > V.maxS - 0.01;
+  }
+  function applyZ() {
+    const im = V.img; if (!im) return;
+    im.style.transform = `translate(${V.Z.x}px,${V.Z.y}px) scale(${V.Z.s})`;
+    stage.classList.toggle("zoomed", V.Z.s > 1.02); paintZoom();
+    if (V.Z.s > 1.4 && !V.big) { // sharper pixels once the person zooms in
+      V.big = true; const f = V.list[V.idx], idx = V.idx, hi = new Image(); hi.referrerPolicy = "no-referrer";
+      hi.onload = () => { if (V.idx === idx && V.img === im) im.src = hi.src; };
+      hi.src = thumbSrc(f, 4096);
+    }
+  }
+  function clampPan() {
+    const Z = V.Z, { w, h, cx, cy } = V.fit; if (!V.img || !w) return;
+    const SW = stage.clientWidth, SH = stage.clientHeight, sw = w * Z.s, sh = h * Z.s;
+    Z.x = sw > SW ? clamp(Z.x, SW - sw / 2 - cx, sw / 2 - cx) : 0;
+    Z.y = sh > SH ? clamp(Z.y, SH - sh / 2 - cy, sh / 2 - cy) : 0;
+  }
+  // (px, py) is the point, relative to the photo's centre, that stays put while zooming
+  function zoomTo(s, px, py) {
+    if (!V.img || !V.fit.w) return;
+    const Z = V.Z; s = clamp(s, 1, V.maxS); const k = s / Z.s;
+    Z.x = px - (px - Z.x) * k; Z.y = py - (py - Z.y) * k; Z.s = s;
+    if (s <= 1.001) { Z.s = 1; Z.x = 0; Z.y = 0; } else clampPan();
+    applyZ();
+  }
+  const mid = () => [stage.clientWidth / 2 - V.fit.cx, stage.clientHeight / 2 - V.fit.cy];
+  const rel = (e) => { const r = stage.getBoundingClientRect(); return [e.clientX - r.left - V.fit.cx, e.clientY - r.top - V.fit.cy]; };
+  const zoomBy = (k) => { const [px, py] = mid(); zoomTo(k > 1 && V.Z.s < 1.02 ? Math.max(1.5, V.Z.s * k) : V.Z.s * k, px, py); if (V.Z.s < 1.06) zoomTo(1, 0, 0); };
+  function zoomToggle(px, py) { zoomTo(V.Z.s > 1.02 ? 1 : 2.6, px, py); }
+  function zoomReset() { if (V.Z.s > 1.02) zoomTo(1, 0, 0); else { const [px, py] = mid(); zoomTo(V.nat.w ? Math.max(2, V.nat.w / V.fit.w) : 2.6, px, py); } }
+  function panBy(dx, dy) { V.Z.x += dx; V.Z.y += dy; clampPan(); applyZ(); }
+
+  const ptrs = new Map(); let gest = null, lastTap = null, lastType = "mouse", tapTimer = 0, wheelT = 0;
+  const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+
+  stage.addEventListener("pointerdown", (e) => {
+    lastType = e.pointerType; if (!V.img) return;
+    try { stage.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (ptrs.size === 1) gest = { x0: e.clientX, y0: e.clientY, t0: Date.now(), zx: V.Z.x, zy: V.Z.y, moved: false };
+    else if (ptrs.size === 2) {
+      const [a, b] = [...ptrs.values()], r = stage.getBoundingClientRect();
+      gest = { pinch: true, d0: Math.max(1, dist(a, b)), s0: V.Z.s, zx: V.Z.x, zy: V.Z.y, px: (a.x + b.x) / 2 - r.left - V.fit.cx, py: (a.y + b.y) / 2 - r.top - V.fit.cy };
+      stage.classList.add("dragging");
+    }
+  });
+  stage.addEventListener("pointermove", (e) => {
+    if (!ptrs.has(e.pointerId) || !gest) return;
+    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (gest.pinch && ptrs.size === 2) {
+      const [a, b] = [...ptrs.values()], r = stage.getBoundingClientRect();
+      const s = clamp(gest.s0 * dist(a, b) / gest.d0, 1, V.maxS), k = s / gest.s0;
+      const px = (a.x + b.x) / 2 - r.left - V.fit.cx, py = (a.y + b.y) / 2 - r.top - V.fit.cy; // fingers may also drag while pinching
+      V.Z.s = s; V.Z.x = px - (gest.px - gest.zx) * k; V.Z.y = py - (gest.py - gest.zy) * k;
+      if (s <= 1.001) { V.Z.x = 0; V.Z.y = 0; } else clampPan();
+      applyZ(); return;
+    }
+    const dx = e.clientX - gest.x0, dy = e.clientY - gest.y0;
+    if (Math.abs(dx) + Math.abs(dy) > 8) gest.moved = true;
+    if (V.Z.s > 1.02 && gest.moved) { stage.classList.add("dragging"); V.Z.x = gest.zx + dx; V.Z.y = gest.zy + dy; clampPan(); applyZ(); }
+  });
+  const endPtr = (e) => {
+    if (!ptrs.has(e.pointerId)) return;
+    const g = gest, was = ptrs.size; ptrs.delete(e.pointerId);
+    stage.classList.remove("dragging");
+    if (g?.pinch) { // keep the remaining finger panning smoothly after a pinch
+      if (ptrs.size === 1) { const p = [...ptrs.values()][0]; gest = { x0: p.x, y0: p.y, t0: Date.now(), zx: V.Z.x, zy: V.Z.y, moved: true, afterPinch: true }; if (V.Z.s < 1.06) zoomTo(1, 0, 0); return; }
+      if (V.Z.s < 1.06) zoomTo(1, 0, 0);
+    } else if (was === 1 && g) {
+      const dx = e.clientX - g.x0, dy = e.clientY - g.y0, dt = Date.now() - g.t0;
+      if (e.pointerType !== "mouse" && V.Z.s < 1.02 && g.moved) {
+        if (Math.abs(dx) > 50 && Math.abs(dx) > 1.4 * Math.abs(dy)) step(dx < 0 ? 1 : -1);
+        else if (dy > 90 && dy > 1.4 * Math.abs(dx)) closeViewer();
+      } else if (e.pointerType !== "mouse" && !g.moved && dt < 300) {
+        const now = Date.now();
+        if (lastTap && now - lastTap.t < 320 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 40) {
+          clearTimeout(tapTimer); lastTap = null; const [px, py] = rel(e); zoomToggle(px, py);
+        } else { lastTap = { t: now, x: e.clientX, y: e.clientY }; clearTimeout(tapTimer); tapTimer = setTimeout(() => { V.el.classList.toggle("idle"); }, 330); }
+      }
+    }
+    if (!ptrs.size) gest = null;
+  };
+  stage.addEventListener("pointerup", endPtr); stage.addEventListener("pointercancel", endPtr);
+  stage.addEventListener("dblclick", (e) => { if (!V.img || lastType !== "mouse") return; const [px, py] = rel(e); zoomToggle(px, py); });
+  stage.addEventListener("wheel", (e) => {
+    if (!V.img) return; e.preventDefault();
+    stage.classList.add("dragging"); clearTimeout(wheelT); wheelT = setTimeout(() => stage.classList.remove("dragging"), 140);
+    const [px, py] = rel(e);
+    if (!e.ctrlKey && V.Z.s > 1.02 && e.shiftKey) { panBy(-e.deltaY, 0); return; }
+    zoomTo(V.Z.s * Math.exp(-e.deltaY * (e.ctrlKey ? 0.012 : 0.0018)), px, py);
+    if (V.Z.s < 1.04) zoomTo(1, 0, 0);
+  }, { passive: false });
+  V.el.addEventListener("pointermove", (e) => { if (e.pointerType === "mouse") wake(); });
+  if ("ResizeObserver" in window) new ResizeObserver(() => { if (V.img) fitImage(); }).observe(stage);
+
+  /* ----- documents and fallback: Google's own preview ----- */
+  function mountFrame(f, why) {
+    setMode("frame");
+    const fr = el("iframe", "v-frame"); fr.src = `https://drive.google.com/file/d/${f.id}/preview`; fr.allow = "autoplay; fullscreen"; fr.allowFullscreen = true; fr.title = f.name;
+    stage.append(fr);
+    const note = el("div", "v-note"); note.innerHTML = `${why ? esc(why) + " " : ""}Not loading? <a href="${esc(driveView(f))}" target="_blank" rel="noopener">Open in Drive</a>`;
+    stage.append(note);
+  }
+
+  /* ----- videos: our own player ----- */
+  const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
+  const clock = (sec) => (isFinite(sec) ? fmtDur(sec * 1000) : "0:00");
+
+  function mountVideo(f) {
+    const vp = el("div", "vp");
+    vp.innerHTML = `<video class="vp-video" playsinline preload="metadata"></video>
+      <div class="v-spin vp-wait"></div>
+      <button class="vp-big" type="button" aria-label="Play video">${ic("play")}</button>
+      <div class="vp-hint" aria-hidden="true"></div>
+      <div class="vp-bar">
+        <input class="vp-seek" type="range" min="0" max="1000" step="1" value="0" aria-label="Seek" />
+        <div class="vp-row">
+          <button type="button" class="vp-play" aria-label="Play" title="Play / pause (Space)">${ic("play")}</button>
+          <button type="button" class="vp-back" aria-label="Back 10 seconds" title="Back 10 seconds (J)">${ic("back10")}</button>
+          <button type="button" class="vp-fwd" aria-label="Forward 10 seconds" title="Forward 10 seconds (L)">${ic("fwd10")}</button>
+          <span class="vp-time">0:00 / 0:00</span>
+          <span class="vp-gap"></span>
+          <button type="button" class="vp-mute" aria-label="Mute" title="Mute (M)">${ic("vol")}</button>
+          <input class="vp-vol" type="range" min="0" max="100" step="1" value="100" aria-label="Volume" />
+          <button type="button" class="vp-speed" aria-label="Playback speed" title="Speed (&lt; &gt;)">1×</button>
+          <button type="button" class="vp-loop" aria-label="Loop" aria-pressed="false" title="Loop (R)">${ic("loop")}</button>
+          <button type="button" class="vp-pip" aria-label="Picture in picture" title="Picture in picture">${ic("pip")}</button>
+          <button type="button" class="vp-fs" aria-label="Full screen" title="Full screen (F)">${ic("expand")}</button>
+        </div>
+      </div>`;
+    stage.append(vp);
+    const v = vp.querySelector("video"), q = (s) => vp.querySelector(s);
+    const seek = q(".vp-seek"), vol = q(".vp-vol"), big = q(".vp-big"), wait = q(".vp-wait"), hint = q(".vp-hint");
+    V.vid = v; let scrub = false, hintT = 0, failT = 0, done = false;
+    v.poster = thumbSrc(f, 1200);
+    if (!(document.pictureInPictureEnabled && v.requestPictureInPicture)) q(".vp-pip").hidden = true;
+    if (!document.fullscreenEnabled && !v.webkitEnterFullscreen) q(".vp-fs").hidden = true;
+
+    const fail = () => { if (done || V.vid !== v) return; done = true; clearTimeout(failT); teardown(); mountFrame(f, "This video can't play here, so Google's player is shown."); wake(); };
+    v.addEventListener("error", fail);
+    failT = setTimeout(() => { if (v.readyState === 0 && !v.error) fail(); }, 25000);
+    v.src = mediaUrl(f);
+
+    const paint = () => {
+      const d = v.duration, t = v.currentTime;
+      if (!scrub && d) seek.value = String(Math.round((t / d) * 1000));
+      const b = v.buffered.length && d ? (v.buffered.end(v.buffered.length - 1) / d) * 100 : 0;
+      seek.style.setProperty("--p", (d ? (t / d) * 100 : 0) + "%"); seek.style.setProperty("--b", b + "%");
+      q(".vp-time").textContent = `${clock(t)} / ${clock(d)}`;
+      seek.setAttribute("aria-valuetext", `${clock(t)} of ${clock(d)}`);
+    };
+    const paintPlay = () => {
+      const ended = v.ended, playing = !v.paused && !ended, icn = ended ? "replay" : playing ? "pause" : "play";
+      q(".vp-play").innerHTML = ic(icn); q(".vp-play").setAttribute("aria-label", playing ? "Pause" : ended ? "Replay" : "Play");
+      big.innerHTML = ic(ended ? "replay" : "play"); vp.classList.toggle("playing", playing);
+      wake();
+    };
+    const paintVol = () => {
+      const m = v.muted || v.volume === 0;
+      q(".vp-mute").innerHTML = ic(m ? "mute" : "vol"); q(".vp-mute").setAttribute("aria-label", m ? "Unmute" : "Mute");
+      vol.value = String(m ? 0 : Math.round(v.volume * 100)); vol.style.setProperty("--p", vol.value + "%");
+    };
+    const say = (t) => { hint.textContent = t; hint.classList.add("on"); clearTimeout(hintT); hintT = setTimeout(() => hint.classList.remove("on"), 750); };
+    const toggle = () => { if (v.ended) v.currentTime = 0; if (v.paused || v.ended) v.play().catch(() => {}); else v.pause(); };
+    const jump = (d) => { if (!isFinite(v.duration)) return; v.currentTime = clamp(v.currentTime + d, 0, v.duration); say((d > 0 ? "+" : "−") + Math.abs(d) + "s"); paint(); wake(); };
+    const setSpeed = (r) => { v.playbackRate = r; q(".vp-speed").textContent = r + "×"; say(r + "×"); };
+    const cycleSpeed = (dir) => { const i = SPEEDS.indexOf(v.playbackRate); setSpeed(SPEEDS[clamp((i < 0 ? 2 : i) + dir, 0, SPEEDS.length - 1)]); };
+    const toggleLoop = () => { v.loop = !v.loop; q(".vp-loop").setAttribute("aria-pressed", String(v.loop)); say(v.loop ? "Loop on" : "Loop off"); };
+    const toggleMute = () => { v.muted = !v.muted; if (!v.muted && v.volume === 0) v.volume = 0.6; paintVol(); };
+    const pip = async () => { try { if (document.pictureInPictureElement) await document.exitPictureInPicture(); else await v.requestPictureInPicture(); } catch { /* ignore */ } };
+
+    ["timeupdate", "durationchange", "progress", "loadedmetadata", "seeked"].forEach((n) => v.addEventListener(n, paint));
+    ["play", "pause", "ended"].forEach((n) => v.addEventListener(n, paintPlay));
+    v.addEventListener("volumechange", paintVol);
+    v.addEventListener("loadedmetadata", () => { clearTimeout(failT); wait.hidden = true; paint(); });
+    v.addEventListener("waiting", () => { wait.hidden = false; });
+    ["playing", "canplay", "loadeddata"].forEach((n) => v.addEventListener(n, () => { wait.hidden = true; }));
+    wait.hidden = false;
+
+    seek.addEventListener("pointerdown", () => { scrub = true; });
+    seek.addEventListener("input", () => { if (v.duration) { v.currentTime = (+seek.value / 1000) * v.duration; paint(); } });
+    const endScrub = () => { scrub = false; };
+    seek.addEventListener("change", endScrub); seek.addEventListener("pointerup", endScrub); seek.addEventListener("blur", endScrub);
+    vol.addEventListener("input", () => { v.muted = false; v.volume = +vol.value / 100; });
+
+    q(".vp-play").onclick = toggle; big.onclick = toggle;
+    q(".vp-back").onclick = () => jump(-10); q(".vp-fwd").onclick = () => jump(10);
+    q(".vp-mute").onclick = toggleMute; q(".vp-speed").onclick = () => setSpeed(SPEEDS[(SPEEDS.indexOf(v.playbackRate) + 1) % SPEEDS.length]);
+    q(".vp-loop").onclick = toggleLoop; q(".vp-pip").onclick = pip; q(".vp-fs").onclick = toggleFS;
+
+    // click: play or pause. Double click or tap: seek on the left and right thirds (touch), full screen in the middle or with a mouse.
+    let click = null;
+    v.addEventListener("click", (e) => {
+      const now = Date.now();
+      if (click && now - click.t < 300) {
+        clearTimeout(click.timer); click = null;
+        const r = v.getBoundingClientRect(), x = (e.clientX - r.left) / r.width;
+        if (lastType !== "mouse" && x < 0.33) jump(-10); else if (lastType !== "mouse" && x > 0.67) jump(10); else toggleFS();
+        return;
+      }
+      click = { t: now, timer: setTimeout(() => { click = null; if (lastType !== "mouse" && V.el.classList.contains("idle")) { wake(); return; } toggle(); }, 300) };
+    });
+
+    V.vctl = { toggle, jump, cycleSpeed, toggleLoop, toggleMute, pip, say, vol: (d) => { v.muted = false; v.volume = clamp(v.volume + d, 0, 1); say("Volume " + Math.round(v.volume * 100) + "%"); }, seekPct: (p) => { if (isFinite(v.duration)) v.currentTime = v.duration * p; paint(); } };
+    V.cleanup = () => { clearTimeout(failT); clearTimeout(hintT); V.vctl = null; if (document.pictureInPictureElement === v) document.exitPictureInPicture?.().catch(() => {}); };
+    paint(); paintPlay(); paintVol();
+  }
+
+  function toggleFS() {
+    if (document.fullscreenEnabled) { if (document.fullscreenElement) document.exitFullscreen(); else V.el.requestFullscreen().catch(() => {}); }
+    else if (V.vid?.webkitEnterFullscreen) V.vid.webkitEnterFullscreen();
   }
 
   function paintStrip() {
@@ -681,7 +931,7 @@
     if (f.videoMediaMetadata?.durationMillis) rows.push(["Length", fmtDur(+f.videoMediaMetadata.durationMillis)]);
     if (folder) rows.push(["Album", folder]);
     $("#v-panel").innerHTML = `<h3>${esc(f.name)}</h3><dl>${rows.map(([a, b]) => `<dt>${esc(a)}</dt><dd>${esc(b)}</dd>`).join("")}</dl>
-      <div class="acts"><a class="btn sm" href="${esc(f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`)}" target="_blank" rel="noopener">${ic("external")}Open in Drive</a><button class="btn sm" type="button" id="p-copy">${ic("link")}Copy link</button></div>`;
+      <div class="acts"><a class="btn sm" href="${esc(driveView(f))}" target="_blank" rel="noopener">${ic("external")}Open in Drive</a><button class="btn sm" type="button" id="p-copy">${ic("link")}Copy link</button></div>`;
     $("#p-copy").onclick = async () => toast((await copyText(fileUrl(f))) ? "Link copied" : "Couldn't copy the link");
   }
 
@@ -698,7 +948,8 @@
   function stopPlay() { if (!V.play) return; clearInterval(V.play); V.play = null; $("#v-play").innerHTML = ic("play"); $("#v-play").setAttribute("aria-label", "Start slideshow"); }
   function wake() {
     V.el.classList.remove("idle"); clearTimeout(V.idle);
-    if (!V.el.classList.contains("frame") && !V.info) V.idle = setTimeout(() => V.el.classList.add("idle"), 3400);
+    const keep = V.mode === "frame" || V.info || (V.mode === "vid" && (!V.vid || V.vid.paused));
+    if (!keep) V.idle = setTimeout(() => V.el.classList.add("idle"), 3400);
   }
 
   async function openFromHash(fid) {
@@ -717,65 +968,6 @@
     const list = S.order.filter((x) => x._k !== "folder"); const i = list.findIndex((x) => x.id === fid);
     if (i >= 0) showViewer(list, i, { push: false }); else showViewer([f], 0, { push: false });
   }
-
-  // Zoom and pan: wheel, double-click, double-tap, pinch and drag; swipe to move between photos.
-  const applyZ = () => { if (!V.img) return; V.img.style.transform = `translate(${V.Z.x}px,${V.Z.y}px) scale(${V.Z.s})`; stage.classList.toggle("zoomed", V.Z.s > 1); };
-  function clampPan() {
-    const Z = V.Z, im = V.img; if (!im) return;
-    const mx = Math.max(0, (im.offsetWidth * Z.s - stage.clientWidth) / 2), my = Math.max(0, (im.offsetHeight * Z.s - stage.clientHeight) / 2);
-    Z.x = clamp(Z.x, -mx, mx); Z.y = clamp(Z.y, -my, my);
-  }
-  function zoomTo(s, cx, cy) {
-    const Z = V.Z; s = clamp(s, 1, 6); const k = s / Z.s;
-    Z.x = cx - (cx - Z.x) * k; Z.y = cy - (cy - Z.y) * k; Z.s = s;
-    if (s === 1) { Z.x = 0; Z.y = 0; } else clampPan();
-    applyZ();
-  }
-  const rel = (e) => { const r = stage.getBoundingClientRect(); return [e.clientX - r.left - r.width / 2, e.clientY - r.top - r.height / 2]; };
-  const ptrs = new Map(); let gest = null, lastTap = null, lastType = "mouse", tapTimer = 0;
-  const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-
-  stage.addEventListener("pointerdown", (e) => {
-    lastType = e.pointerType; if (!V.img) return;
-    try { stage.setPointerCapture(e.pointerId); } catch { /* ignore */ }
-    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (ptrs.size === 1) gest = { x0: e.clientX, y0: e.clientY, t0: Date.now(), zx: V.Z.x, zy: V.Z.y, moved: false };
-    else if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; gest = { pinch: true, d0: dist(a, b), s0: V.Z.s }; }
-  });
-  stage.addEventListener("pointermove", (e) => {
-    if (!ptrs.has(e.pointerId) || !gest) return;
-    ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (gest.pinch && ptrs.size === 2) {
-      const [a, b] = [...ptrs.values()], r = stage.getBoundingClientRect();
-      zoomTo(gest.s0 * dist(a, b) / gest.d0, (a.x + b.x) / 2 - r.left - r.width / 2, (a.y + b.y) / 2 - r.top - r.height / 2);
-      return;
-    }
-    const dx = e.clientX - gest.x0, dy = e.clientY - gest.y0;
-    if (Math.abs(dx) + Math.abs(dy) > 8) gest.moved = true;
-    if (V.Z.s > 1 && gest.moved) { stage.classList.add("dragging"); V.Z.x = gest.zx + dx; V.Z.y = gest.zy + dy; clampPan(); applyZ(); }
-  });
-  const endPtr = (e) => {
-    if (!ptrs.has(e.pointerId)) return;
-    const g = gest, was = ptrs.size; ptrs.delete(e.pointerId);
-    stage.classList.remove("dragging");
-    if (was === 1 && g && !g.pinch) {
-      const dx = e.clientX - g.x0, dy = e.clientY - g.y0, dt = Date.now() - g.t0;
-      if (e.pointerType !== "mouse" && V.Z.s === 1 && g.moved) {
-        if (Math.abs(dx) > 50 && Math.abs(dx) > 1.4 * Math.abs(dy)) step(dx < 0 ? 1 : -1);
-        else if (dy > 90 && dy > 1.4 * Math.abs(dx)) closeViewer();
-      } else if (e.pointerType !== "mouse" && !g.moved && dt < 300) {
-        const now = Date.now();
-        if (lastTap && now - lastTap.t < 320 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 40) {
-          clearTimeout(tapTimer); lastTap = null; const [cx, cy] = rel(e); zoomTo(V.Z.s > 1 ? 1 : 2.6, cx, cy);
-        } else { lastTap = { t: now, x: e.clientX, y: e.clientY }; clearTimeout(tapTimer); tapTimer = setTimeout(() => { V.el.classList.toggle("idle"); }, 330); }
-      }
-    }
-    if (!ptrs.size) gest = null;
-  };
-  stage.addEventListener("pointerup", endPtr); stage.addEventListener("pointercancel", endPtr);
-  stage.addEventListener("dblclick", (e) => { if (!V.img || lastType !== "mouse") return; const [cx, cy] = rel(e); zoomTo(V.Z.s > 1 ? 1 : 2.6, cx, cy); });
-  stage.addEventListener("wheel", (e) => { if (!V.img) return; e.preventDefault(); const [cx, cy] = rel(e); zoomTo(V.Z.s * Math.exp(-e.deltaY * 0.0018), cx, cy); }, { passive: false });
-  V.el.addEventListener("pointermove", (e) => { if (e.pointerType === "mouse") wake(); });
 
   /* ---------- UI wiring ---------- */
   function applyTheme(t) { document.documentElement.dataset.theme = t; store.set("dg-theme", t); }
@@ -876,23 +1068,40 @@
     $("#v-info").onclick = toggleInfo; $("#v-play").onclick = togglePlay;
     $("#v-share").onclick = () => { const f = V.list[V.idx]; shareLink(fileUrl(f), f.name); };
     $("#v-download").onclick = () => downloadFiles([V.list[V.idx]]);
-    if (document.fullscreenEnabled) { $("#v-full").onclick = () => (document.fullscreenElement ? document.exitFullscreen() : V.el.requestFullscreen().catch(() => {})); } else $("#v-full").hidden = true;
+    if (document.fullscreenEnabled) $("#v-full").onclick = toggleFS; else $("#v-full").hidden = true;
+    $("#v-zin").onclick = () => zoomBy(1.5); $("#v-zout").onclick = () => zoomBy(1 / 1.5); $("#v-zreset").onclick = zoomReset;
     $("#v-strip").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) go(+b.dataset.i); });
 
     // keyboard
     document.addEventListener("keydown", (e) => {
       const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName);
       if (!V.el.hidden) {
-        if (e.key === "Escape") { if (!document.fullscreenElement) closeViewer(); }
-        else if (e.key === "ArrowLeft") step(-1);
-        else if (e.key === "ArrowRight") step(1);
-        else if (e.key === "i" || e.key === "I") toggleInfo();
-        else if (e.key === "p" || e.key === "P") togglePlay();
-        else if (e.key === "d" || e.key === "D") downloadFiles([V.list[V.idx]]);
-        else if ((e.key === "f" || e.key === "F") && document.fullscreenEnabled) $("#v-full").click();
-        else if (e.key === "+" || e.key === "=") zoomTo(V.Z.s * 1.4, 0, 0);
-        else if (e.key === "-") zoomTo(V.Z.s / 1.4, 0, 0);
-        else if (e.key === "0") zoomTo(1, 0, 0);
+        const k = e.key, inBar = !!e.target.closest?.(".vp-bar"), onRange = e.target.type === "range";
+        if (e.ctrlKey || e.metaKey || e.altKey) return;
+        if (k === "Escape") { if (!document.fullscreenElement) closeViewer(); wake(); return; }
+        if (inBar && (k === " " || k === "Enter")) { wake(); return; } // let a focused control handle its own key
+        if (onRange && /^Arrow/.test(k)) { wake(); return; }
+        const vc = V.vctl, isImg = V.mode === "img";
+        if (vc && (k === " " || k === "k" || k === "K")) { e.preventDefault(); vc.toggle(); }
+        else if (vc && (k === "ArrowLeft" || k === "ArrowRight") && !e.shiftKey) { e.preventDefault(); vc.jump(k === "ArrowLeft" ? -5 : 5); }
+        else if (vc && (k === "j" || k === "J")) vc.jump(-10);
+        else if (vc && (k === "l" || k === "L")) vc.jump(10);
+        else if (vc && (k === "ArrowUp" || k === "ArrowDown")) { e.preventDefault(); vc.vol(k === "ArrowUp" ? 0.05 : -0.05); }
+        else if (vc && (k === "m" || k === "M")) vc.toggleMute();
+        else if (vc && (k === "r" || k === "R")) vc.toggleLoop();
+        else if (vc && (k === "<" || k === ">")) vc.cycleSpeed(k === ">" ? 1 : -1);
+        else if (vc && /^[0-9]$/.test(k)) vc.seekPct(+k / 10);
+        else if (vc && k === "Home") vc.seekPct(0);
+        else if (k === "ArrowLeft" || k === "PageUp") step(-1);
+        else if (k === "ArrowRight" || k === "PageDown") step(1);
+        else if (isImg && V.Z.s > 1.02 && /^Arrow/.test(k)) { e.preventDefault(); panBy(k === "ArrowLeft" ? 90 : k === "ArrowRight" ? -90 : 0, k === "ArrowUp" ? 90 : k === "ArrowDown" ? -90 : 0); }
+        else if (k === "i" || k === "I") toggleInfo();
+        else if (k === "p" || k === "P") togglePlay();
+        else if (k === "d" || k === "D") downloadFiles([V.list[V.idx]]);
+        else if ((k === "f" || k === "F") && (document.fullscreenEnabled || V.vid?.webkitEnterFullscreen)) toggleFS();
+        else if (isImg && (k === "+" || k === "=")) zoomBy(1.4);
+        else if (isImg && (k === "-" || k === "_")) zoomBy(1 / 1.4);
+        else if (isImg && k === "0") zoomReset();
         wake(); return;
       }
       if (e.key === "Escape") {
@@ -910,7 +1119,12 @@
       applySizes(); if (S.layout === "mosaic") for (const g of S.groups.values()) layoutGroup(g);
     }).observe(content);
     addEventListener("popstate", () => applyHash());
-    document.addEventListener("fullscreenchange", () => { $("#v-full").setAttribute("aria-label", document.fullscreenElement ? "Exit full screen" : "Full screen"); });
+    document.addEventListener("fullscreenchange", () => {
+      const on = !!document.fullscreenElement, l = on ? "Exit full screen" : "Full screen";
+      $("#v-full").setAttribute("aria-label", l); $("#v-full").innerHTML = ic(on ? "shrink" : "expand");
+      const b = $(".vp-fs"); if (b) { b.setAttribute("aria-label", l); b.innerHTML = ic(on ? "shrink" : "expand"); }
+      if (V.img) fitImage();
+    });
   }
 
   /* ---------- boot ---------- */

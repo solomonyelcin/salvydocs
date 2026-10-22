@@ -40,6 +40,16 @@
   <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z" fill="currentColor" stroke="none"/></symbol>
   <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8.5 5v14M15.5 5v14" stroke-width="2.6"/></symbol>
   <symbol id="i-expand" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+  <symbol id="i-vol" viewBox="0 0 24 24"><path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5z"/><path d="M15.5 9a4 4 0 010 6M18 6.5a7.5 7.5 0 010 11"/></symbol>
+  <symbol id="i-mute" viewBox="0 0 24 24"><path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5z"/><path d="M16 9.5l5 5M21 9.5l-5 5"/></symbol>
+  <symbol id="i-pip" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="14" rx="2.5"/><rect x="11.5" y="11.5" width="7" height="5" rx="1" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-loop" viewBox="0 0 24 24"><path d="M17 3.5l3 3-3 3"/><path d="M4 11V9.5a3 3 0 013-3h13M7 20.5l-3-3 3-3"/><path d="M20 13v1.5a3 3 0 01-3 3H4"/></symbol>
+  <symbol id="i-back10" viewBox="0 0 24 24"><path d="M5 5v4.5h4.5"/><path d="M5.6 9.5A8 8 0 1112 20"/><path d="M9.8 12.2v4.4M13 12.2h2.4v4.4H13z" stroke-width="1.4"/></symbol>
+  <symbol id="i-fwd10" viewBox="0 0 24 24"><path d="M19 5v4.5h-4.5"/><path d="M18.4 9.5A8 8 0 1012 20"/><path d="M9.8 12.2v4.4M13 12.2h2.4v4.4H13z" stroke-width="1.4"/></symbol>
+  <symbol id="i-shrink" viewBox="0 0 24 24"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/></symbol>
+  <symbol id="i-replay" viewBox="0 0 24 24"><path d="M4.5 12a7.5 7.5 0 112.3 5.4"/><path d="M4.5 6.5V12H10"/></symbol>
   <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></symbol>
   <symbol id="i-image" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="3"/><circle cx="9" cy="9" r="1.7"/><path d="M20.5 16l-5-5-8 8.5"/></symbol>
   <symbol id="i-video" viewBox="0 0 24 24"><rect x="3.5" y="5.5" width="17" height="13" rx="3"/><path d="M10.5 9.5v5l4-2.5z"/></symbol>
@@ -169,6 +179,11 @@
     </div>
   </div>
   <div class="v-stage" id="v-stage"></div>
+  <div class="v-zoom" id="v-zoom" role="group" aria-label="Zoom">
+    <button type="button" id="v-zout" aria-label="Zoom out" title="Zoom out (-)"><svg class="i"><use href="#i-minus"/></svg></button>
+    <button type="button" id="v-zreset" class="pct" aria-label="Fit to screen" title="Fit to screen (0)">Fit</button>
+    <button type="button" id="v-zin" aria-label="Zoom in" title="Zoom in (+)"><svg class="i"><use href="#i-plus"/></svg></button>
+  </div>
   <button class="v-nav prev" id="v-prev" type="button" aria-label="Previous"><svg class="i"><use href="#i-left"/></svg></button>
   <button class="v-nav next" id="v-next" type="button" aria-label="Next"><svg class="i"><use href="#i-right"/></svg></button>
   <div class="v-strip" id="v-strip" aria-hidden="true"></div>

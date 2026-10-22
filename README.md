@@ -10,12 +10,13 @@ Live site: https://solomonyelcin.github.io/salvydocs/
 - **Browse** albums (sub-folders) with breadcrumbs. Photos are grouped by month in a mosaic, documents are listed as rows.
 - **Search** by name or date (for example `september` or `2026`). Search this album, or switch to **Everywhere** to search every album. Press `/` to jump to the search box.
 - **Filter and sort** by type (Photos, Videos, Documents, Albums), by date (last 7 or 30 days, last 12 months, or a year), and by newest, oldest or name. Choose Mosaic, Grid or List layout and the thumbnail size.
-- **View** photos full screen with zoom (wheel, double-click, double-tap or pinch), swipe or arrow keys to move on, a filmstrip, a details panel and a slideshow. Videos and documents open in Google's own preview player.
+- **View** photos fitted to any screen, with zoom in/out/fit buttons (also wheel, double-click, double-tap or pinch), drag to pan, swipe or arrow keys to move on, a filmstrip, a details panel and a slideshow. **Videos** play in a built-in player (seek bar, speed, volume, loop, picture-in-picture, full screen, double-tap to skip 10 s). Videos the browser can't play, and documents, open in Google's own preview.
 - **Download** one file, or turn on **Select** (or long-press a photo on a phone), pick several and download them together. Google Docs, Sheets and Slides download as PDF, XLSX and PPTX.
 - **Share** an album or a single photo. Every view has its own link, and the Back button works as expected. On phones, Share opens the system share sheet.
 - Works on phones, tablets and desktops, in light and dark themes, with keyboard support.
 
-Keyboard in the viewer: arrows move, `I` details, `P` slideshow, `D` download, `F` full screen, `+` `-` `0` zoom, `Esc` closes.
+Keyboard in the viewer: arrows move (or pan when zoomed in), `I` details, `P` slideshow, `D` download, `F` full screen, `+` `-` `0` zoom, `Esc` closes.
+Video: `Space` play/pause, `←` `→` seek 5 s, `J` `L` seek 10 s, `↑` `↓` volume, `M` mute, `<` `>` speed, `R` loop, `PageUp`/`PageDown` previous/next file.
 
 ## How it works
 
