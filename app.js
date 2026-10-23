@@ -122,16 +122,24 @@
   /* ---------- Drive API ---------- */
   async function gget(path, params) {
     const url = API + path + "?" + new URLSearchParams({ ...params, key: CFG.API_KEY });
-    let r;
-    for (let i = 0; i < 3; i++) {
+    let r, reason = "";
+    for (let i = 0; i < 5; i++) {
       r = await fetch(url);
-      if (r.status === 429 || r.status >= 500) { await sleep(500 * (i + 1)); continue; }
+      if (!r.ok && r.status !== 404) {
+        try { const j = await r.clone().json(); reason = j?.error?.errors?.[0]?.reason || j?.error?.status || ""; } catch { reason = ""; }
+      }
+      // Google reports "too many requests" as 403 as well as 429, so wait and retry
+      const busy = r.status === 429 || r.status >= 500 || (r.status === 403 && /rateLimit|quota|backend/i.test(reason));
+      if (busy && i < 4) { await sleep(600 * (i + 1) ** 2); continue; }
       break;
     }
     if (!r.ok) {
-      const e = new Error(r.statusText); e.status = r.status;
-      if (r.status === 400) e.message = "The Google API key isn't valid. Check the key in config.js.";
-      else if (r.status === 403) e.message = "Google blocked this request. Check that the folder is shared with “Anyone with the link” and that the API key allows this website.";
+      const e = new Error(r.statusText); e.status = r.status; e.reason = reason;
+      const why = reason ? ` (${reason})` : "";
+      if (r.status === 400 && /key|API_KEY/i.test(reason)) e.message = "The Google API key isn't valid. Check the key in config.js.";
+      else if (r.status === 400) e.message = `Google couldn't handle that request${why}. Try again.`;
+      else if (r.status === 403 && /rateLimit|quota/i.test(reason)) e.message = "Google Drive is busy right now (too many requests). Wait a minute and try again.";
+      else if (r.status === 403) e.message = `Google blocked this request${why}. Check that the folder is shared with “Anyone with the link” and that the API key allows this website.`;
       else if (r.status === 404) e.message = "This album can't be found. It may have been moved or unshared.";
       else e.message = "Couldn't reach Google Drive. Check your connection and try again.";
       throw e;
@@ -181,18 +189,28 @@
     if (S.indexing) return S.indexing;
     S.indexing = (async () => {
       const all = []; const names = new Map([[ROOT.id, ROOT.name]]); const queue = [ROOT.id];
-      while (queue.length && all.length < 10000) {
-        const batch = queue.splice(0, 15);
-        const q = `(${batch.map((i) => `'${i}' in parents`).join(" or ")}) and trashed=false`;
+      const take = (data) => {
+        for (const f of data.files || []) { prep(f); all.push(f); if (f._k === "folder") { queue.push(f.id); names.set(f.id, f.name); known.set(f.id, { id: f.id, name: f.name, parent: f.parents?.[0] || null }); } }
+        S.indexCount = all.length; paintStatus();
+      };
+      const list = async (parents) => {
+        const q = `(${parents.map((i) => `'${i}' in parents`).join(" or ")}) and trashed=false`;
         let token = "";
         do {
           const data = await gget("/files", { q, pageSize: 1000, fields: LIST_FIELDS, pageToken: token });
-          for (const f of data.files || []) { prep(f); all.push(f); if (f._k === "folder") { queue.push(f.id); names.set(f.id, f.name); known.set(f.id, { id: f.id, name: f.name, parent: f.parents?.[0] || null }); } }
-          token = data.nextPageToken || "";
-          S.indexCount = all.length; paintStatus();
+          take(data); token = data.nextPageToken || "";
         } while (token && all.length < 10000);
+      };
+      while (queue.length && all.length < 10000) {
+        const batch = queue.splice(0, 10);
+        try { await list(batch); }
+        catch (e) {
+          if (e.status !== 400 && e.status !== 403) throw e;
+          // the combined query was refused: ask for the albums one at a time instead
+          for (const id of batch) { await list([id]); await sleep(120); }
+        }
       }
-      S.index = { items: all, names };
+      S.index = { items: [...new Map(all.map((f) => [f.id, f])).values()], names };
       return S.index;
     })().then((x) => { render(); return x; }, (e) => { S.indexing = null; S.error = e.message; render(); });
     return S.indexing;
