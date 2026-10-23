@@ -44,8 +44,8 @@ async function listPhotos() {
 
 async function download(f) {
   const urls = [];
-  if (f.thumbnailLink) urls.push(f.thumbnailLink.replace(/=s\d+.*$/, "") + "=s400");
-  urls.push(`https://drive.google.com/thumbnail?id=${f.id}&sz=w400`, `${API}/files/${f.id}?alt=media&key=${KEY}`);
+  if (f.thumbnailLink) urls.push(f.thumbnailLink.replace(/=s\d+.*$/, "") + "=s800");
+  urls.push(`https://drive.google.com/thumbnail?id=${f.id}&sz=w800`, `${API}/files/${f.id}?alt=media&key=${KEY}`);
   for (const u of urls) {
     try { const r = await fetch(u, { headers: H }); if (r.ok && /^image\//.test(r.headers.get("content-type") || "")) return Buffer.from(await r.arrayBuffer()); } catch { /* try next */ }
   }
@@ -56,7 +56,7 @@ const b64 = (a) => Buffer.from(a.buffer, a.byteOffset, a.byteLength).toString("b
 const quant = (v) => { let n = 0; for (const x of v) n += x * x; n = Math.sqrt(n) || 1; return Int8Array.from(v, (x) => Math.round((x / n) * 127)); };
 
 async function previous() {
-  try { const r = await fetch(SITE + "search-index.json", { headers: { "Cache-Control": "no-cache" } }); if (r.ok) { const j = await r.json(); if (j.model === MODEL) return j.items || {}; } } catch { /* first run */ }
+  try { const r = await fetch(SITE + "search-index.json", { headers: { "Cache-Control": "no-cache" } }); if (r.ok) { const j = await r.json(); if (j.model === MODEL && j.v === 2) return j.items || {}; } } catch { /* first run */ }
   try { return JSON.parse(fs.readFileSync(OUT, "utf8")).items || {}; } catch { return {}; }
 }
 
@@ -73,14 +73,21 @@ if (todo.length) {
   if (T) {
     const proc = await T.AutoProcessor.from_pretrained(MODEL);
     const vision = await T.CLIPVisionModelWithProjection.from_pretrained(MODEL, { quantized: true });
-    embed = async (buf) => { const img = await T.RawImage.fromBlob(new Blob([buf])); const { image_embeds } = await vision(await proc(img)); return image_embeds.data; };
-  } else embed = async (buf) => Float32Array.from({ length: 512 }, (_, i) => Math.sin(i + buf.length)); // test stand-in
+    // The whole photo plus its four quarters, so small things (a ball in a big scene) still show up.
+    const one = async (img) => { const { image_embeds } = await vision(await proc(img)); return image_embeds.data; };
+    embed = async (buf) => {
+      const img = await T.RawImage.fromBlob(new Blob([buf])), w = img.width, h = img.height, out = [await one(img)];
+      const x = Math.floor(w * 0.55), y = Math.floor(h * 0.55); // quarters overlap a little
+      for (const [x0, y0] of [[0, 0], [w - x, 0], [0, h - y], [w - x, h - y]]) out.push(await one(await img.crop([x0, y0, x0 + x - 1, y0 + y - 1])));
+      return out;
+    };
+  } else embed = async (buf) => [0, 1, 2, 3, 4].map((c) => Float32Array.from({ length: 512 }, (_, i) => Math.sin(i + buf.length + c))); // test stand-in
   let done = 0, failed = 0;
   for (const [f, key] of todo.slice(0, MAX)) {
-    try { items[f.id] = { k: key, e: b64(quant(await embed(await download(f)))) }; } catch (e) { failed++; console.warn("skip", f.name, e.message); }
+    try { items[f.id] = { k: key, e: (await embed(await download(f))).map((v) => b64(quant(v))) }; } catch (e) { failed++; console.warn("skip", f.name, e.message); }
     if (++done % 25 === 0) console.log(`  ${done}/${todo.length}`);
   }
   console.log(`Embedded ${done - failed}, skipped ${failed}.`);
 }
-fs.writeFileSync(OUT, JSON.stringify({ v: 1, model: MODEL, dim: 512, items }));
+fs.writeFileSync(OUT, JSON.stringify({ v: 2, model: MODEL, dim: 512, items }));
 console.log(`Wrote ${OUT} with ${Object.keys(items).length} photos.`);

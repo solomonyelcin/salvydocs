@@ -2,14 +2,14 @@
    scripts/build-index.mjs; the words are embedded here in the browser with the same CLIP model (downloaded once, then cached). */
 (function () {
   const MODEL = "Xenova/clip-vit-base-patch32", LIB = "https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2";
-  const MIN = 0.2, BAND = 0.05, CAP = 120;
+  const MIN = 0.2, Z = [2.4, 1.6], CAP = [48, 200]; // how far above the typical photo a match must score: strict, then broader
   let indexP = null, modelP = null; const cache = new Map();
 
   function loadIndex() {
     return (indexP ||= fetch("search-index.json", { cache: "no-cache" }).then((r) => (r.ok ? r.json() : null)).then((j) => {
-      if (!j || j.model !== MODEL || !j.items) return null;
+      if (!j || j.model !== MODEL || j.v !== 2 || !j.items) return null;
       const m = new Map();
-      for (const [id, o] of Object.entries(j.items)) { const s = atob(o.e), a = new Int8Array(s.length); for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i) << 24 >> 24; m.set(id, a); }
+      for (const [id, o] of Object.entries(j.items)) m.set(id, o.e.map((b) => { const s = atob(b), a = new Int8Array(s.length); for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i) << 24 >> 24; return a; }));
       return m.size ? m : null;
     }).catch(() => null));
   }
@@ -24,28 +24,39 @@
   }
   async function embedText(q, onStatus) {
     const { tok, model } = await loadModel(onStatus);
-    const { text_embeds } = await model(tok(["a photo of " + q], { padding: true, truncation: true }));
-    const v = text_embeds.data; let n = 0; for (const x of v) n += x * x; n = Math.sqrt(n) || 1;
-    return Float32Array.from(v, (x) => x / n);
+    // a few phrasings of the same words, averaged, are more reliable than one
+    const prompts = ["a photo of " + q, "a close-up photo of " + q, "a photo with " + q + " in it"];
+    const { text_embeds } = await model(tok(prompts, { padding: true, truncation: true }));
+    const d = text_embeds.data, dim = d.length / prompts.length, v = new Float32Array(dim);
+    for (let p = 0; p < prompts.length; p++) { let n = 0; for (let i = 0; i < dim; i++) n += d[p * dim + i] ** 2; n = Math.sqrt(n) || 1; for (let i = 0; i < dim; i++) v[i] += d[p * dim + i] / n; }
+    let n = 0; for (const x of v) n += x * x; n = Math.sqrt(n) || 1;
+    return v.map((x) => x / n);
   }
-  function rank(vec, index, allowed) {
-    const all = [];
-    for (const [id, a] of index) { if (allowed && !allowed.has(id)) continue; let d = 0; for (let i = 0; i < a.length; i++) d += a[i] * vec[i]; all.push([id, d / 127]); }
+  // Score each photo by its best-matching part, then keep only photos that stand out from the rest of the library.
+  function rank(vec, index, more) {
+    const all = []; let sum = 0, sq = 0;
+    for (const [id, parts] of index) {
+      let best = -1;
+      for (const a of parts) { let d = 0; for (let i = 0; i < a.length; i++) d += a[i] * vec[i]; d /= 127; if (d > best) best = d; }
+      all.push([id, best]); sum += best; sq += best * best;
+    }
+    const n = all.length || 1, mean = sum / n, sd = Math.sqrt(Math.max(1e-9, sq / n - mean * mean));
+    const cut = Math.max(MIN, mean + Z[more ? 1 : 0] * sd), cap = CAP[more ? 1 : 0];
     all.sort((x, y) => y[1] - x[1]);
-    const best = all[0]?.[1] ?? 0, out = new Map();
-    for (const [id, s] of all) { if (out.size >= CAP || s < MIN || s < best - BAND) break; out.set(id, s); }
-    return out;
+    const out = new Map(); let total = 0;
+    for (const [id, s] of all) if (s >= cut) { total++; if (out.size < cap) out.set(id, s); }
+    out.total = total; return out;
   }
 
   window.SmartSearch = {
     // true when a search index has been built for this site
     available: async () => !!(await loadIndex()),
     // returns Map(fileId -> score) of photos that look like the words, or null when smart search can't run
-    async search(q, onStatus) {
-      const key = q.toLowerCase(); if (cache.has(key)) return cache.get(key);
+    async search(q, onStatus, more = false) {
+      const key = q.toLowerCase() + (more ? "|more" : ""); if (cache.has(key)) return cache.get(key);
       const index = await loadIndex(); if (!index) return null;
       if (navigator.connection?.saveData && !modelP) return null;
-      const res = rank(await embedText(q, onStatus), index);
+      const res = rank(await embedText(q, onStatus), index, more);
       cache.set(key, res); return res;
     },
     _rank: rank,

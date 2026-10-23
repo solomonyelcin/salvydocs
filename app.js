@@ -245,15 +245,15 @@
 
   /* ---------- smart (visual) search ---------- */
   let aiSeq = 0;
-  async function smartSearch(q) {
-    const my = ++aiSeq;
+  async function smartSearch(q, more = false) {
+    const my = ++aiSeq; S.aiMore = more;
     if (!window.SmartSearch || q.length < 2) { S.ai = null; S.aiState = ""; return; }
     try {
       await new Promise((r) => setTimeout(r, 250)); if (my !== aiSeq) return; // wait for typing to settle
       if (!(await SmartSearch.available())) return;
       if (my !== aiSeq) return;
       S.aiState = "loading"; S.aiMsg = "Searching the photos…"; paintChrome();
-      const scores = await SmartSearch.search(q, (m) => { if (my === aiSeq) { S.aiMsg = m; paintChrome(); } });
+      const scores = await SmartSearch.search(q, (m) => { if (my === aiSeq) { S.aiMsg = m; paintChrome(); } }, S.aiMore);
       if (my !== aiSeq) return;
       S.aiState = ""; S.ai = scores ? { q, scores } : null; render();
     } catch { if (my === aiSeq) { S.aiState = ""; S.ai = null; render(); } }
@@ -479,6 +479,12 @@
       if (S.done && !parts.length) text = "";
     }
     $("#stats").textContent = text;
+    if (searching && S.ai && S.ai.q === S.q && S.aiState !== "loading") {
+      const b = el("button", "linkbtn"); b.type = "button";
+      b.textContent = S.aiMore ? "Show fewer, closer matches" : "Show more matches";
+      b.onclick = () => smartSearch(S.q, !S.aiMore);
+      $("#stats").append(" ", b);
+    }
     // tabs
     for (const b of $$("#tabs .tab")) {
       const t = b.dataset.type, n = S.counts[t] ?? 0;
