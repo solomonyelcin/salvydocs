@@ -8,6 +8,7 @@ Live site: https://solomonyelcin.github.io/salvydocs/
 ## What visitors can do
 
 - **Browse** albums (sub-folders) with breadcrumbs. Photos are grouped by month in a mosaic, documents are listed as rows.
+- **Smart search**: type what is in a photo (for example `cat` or `beach`) and photos that look like it are found, even if the file name says nothing. The first smart search downloads a small AI model (about 60 MB, once). Photos are indexed automatically on every deploy and nightly; the set-up is in *Smart search* below.
 - **Search** by name or date (for example `september` or `2026`). Search this album, or switch to **Everywhere** to search every album. Press `/` to jump to the search box.
 - **Filter and sort** by type (Photos, Videos, Documents, Albums), by date (last 7 or 30 days, last 12 months, or a year), and by newest, oldest or name. Choose Mosaic, Grid or List layout and the thumbnail size.
 - **View** photos fitted to any screen, with zoom in/out/fit buttons (also wheel, double-click, double-tap or pinch), drag to pan, swipe or arrow keys to move on, a filmstrip, a details panel and a slideshow. **Videos** play in a built-in player (seek bar, speed, volume, loop, picture-in-picture, full screen, double-tap to skip 10 s). Videos the browser can't play, and documents, open in Google's own preview.
@@ -50,3 +51,10 @@ In the repo, **Settings → Pages → Source** must be **GitHub Actions**.
 
 - `ROOT_FOLDER_ID`, `ROOT_NAME`: the folder to show and the name displayed as the title.
 - `TAGLINE` (optional): the line under the title on the main page.
+
+## Smart search
+
+`scripts/build-index.mjs` runs in the deploy workflow. It reads every photo in the shared folder, turns each into a small vector with the CLIP model (`Xenova/clip-vit-base-patch32`) and publishes `search-index.json` next to the site. Photos that have not changed are reused, so later runs are quick. A nightly run (and any push) picks up new photos.
+In the browser, `ai.js` turns the words typed into a vector with the same model and ranks the photos by similarity. If no index exists yet, search falls back to names and dates.
+The script sends the site address as the referrer, so the existing restricted API key works and no extra secret is needed.
+Run the **Deploy to GitHub Pages** workflow by hand from the Actions tab to index new photos straight away.

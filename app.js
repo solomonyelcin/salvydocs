@@ -225,6 +225,22 @@
     img.onload = () => img.classList.add("ok"); img.src = url; cover.prepend(img);
   }
 
+  /* ---------- smart (visual) search ---------- */
+  let aiSeq = 0;
+  async function smartSearch(q) {
+    const my = ++aiSeq;
+    if (!window.SmartSearch || q.length < 2) { S.ai = null; S.aiState = ""; return; }
+    try {
+      await new Promise((r) => setTimeout(r, 250)); if (my !== aiSeq) return; // wait for typing to settle
+      if (!(await SmartSearch.available())) return;
+      if (my !== aiSeq) return;
+      S.aiState = "loading"; S.aiMsg = "Searching the photos…"; paintChrome();
+      const scores = await SmartSearch.search(q, (m) => { if (my === aiSeq) { S.aiMsg = m; paintChrome(); } });
+      if (my !== aiSeq) return;
+      S.aiState = ""; S.ai = scores ? { q, scores } : null; render();
+    } catch { if (my === aiSeq) { S.aiState = ""; S.ai = null; render(); } }
+  }
+
   /* ---------- filtering ---------- */
   function baseList() { return S.q && S.scope === "all" ? (S.index ? S.index.items : []) : S.items; }
   function dateRange() {
@@ -244,10 +260,15 @@
     const range = dateRange();
     const counts = { all: 0, photos: 0, videos: 0, docs: 0, albums: 0 };
     const out = []; const base = baseList();
-    S.map = new Map();
+    const ai = terms.length && S.ai && S.ai.q === S.q && S.ai.scores.size ? S.ai.scores : null;
+    S.map = new Map(); S.aiHits = 0;
     for (const f of base) {
       S.map.set(f.id, f);
-      if (terms.length) { const hay = searchText(f); if (!terms.every((t) => hay.includes(t))) continue; }
+      if (terms.length) {
+        const hay = searchText(f), byName = terms.every((t) => hay.includes(t));
+        if (!byName && !(ai && f._k === "image" && ai.has(f.id))) continue;
+        if (ai) { f._rank = byName ? 2 + (ai.get(f.id) || 0) : ai.get(f.id); if (!byName) S.aiHits++; }
+      }
       if (range && (f._t < range[0] || f._t >= range[1])) continue;
       counts.all++; counts[TYPE_KEY[f._k]]++;
       if (S.type !== "all" && TYPE_KEY[f._k] !== S.type) continue;
@@ -259,7 +280,8 @@
       az: (a, b) => coll.compare(a.name, b.name),
       za: (a, b) => coll.compare(b.name, a.name),
     }[S.sort];
-    out.sort(cmp);
+    out.sort(ai ? (a, b) => (b._rank || 0) - (a._rank || 0) || cmp(a, b) : cmp);
+    S.ranked = !!ai;
     const fo = [], me = [], dc = [];
     for (const f of out) (f._k === "folder" ? fo : f._k === "doc" ? dc : me).push(f);
     S.view = out; S.order = [...fo, ...me, ...dc];
@@ -321,7 +343,7 @@
       s.body.append(tileEl(f)); return;
     }
     const s = section("media", S.mediaTitle, S.sec.media);
-    const dated = S.sort === "new" || S.sort === "old";
+    const dated = !S.ranked && (S.sort === "new" || S.sort === "old");
     const key = dated ? new Date(f._t).getFullYear() + "-" + new Date(f._t).getMonth() : "all";
     let g = S.groups.get(key);
     if (!g) {
@@ -430,7 +452,7 @@
     const all = S.items; const c = { folder: 0, image: 0, video: 0, doc: 0 };
     for (const f of all) c[f._k]++;
     let text;
-    if (searching) text = `${plural(S.view.length, "result")} for “${S.q}” ${S.scope === "all" ? "in every album" : "in this album"}`;
+    if (searching) text = S.aiState === "loading" ? (S.aiMsg || "Preparing smart search…") : `${plural(S.view.length, "result")} for “${S.q}” ${S.scope === "all" ? "in every album" : "in this album"}${S.aiHits ? `, ${plural(S.aiHits, "photo")} matched by what is in them` : ""}`;
     else {
       const parts = [];
       if (c.folder) parts.push(plural(c.folder, "album")); if (c.image) parts.push(plural(c.image, "photo"));
@@ -525,7 +547,7 @@
       S.sig = sig; S.type = h.t; S.q = h.q; S.sort = h.s; S.date = /^(any|7|30|365|y\d{4})$/.test(h.r) ? h.r : "any"; S.scope = h.scope;
       $("#search").value = S.q;
       if (newFolder) await loadFolder(h.d); else render();
-      S.started = true;
+      S.started = true; smartSearch(S.q);
       if (S.q && S.scope === "all") ensureIndex();
     }
     if (h.f) await openFromHash(h.f); else closeViewer(true);
@@ -1026,10 +1048,10 @@
     let st;
     $("#search").addEventListener("input", () => {
       $("#search-clear").hidden = !$("#search").value; clearTimeout(st);
-      st = setTimeout(() => { S.q = $("#search").value.trim(); syncUrl(); if (S.q && S.scope === "all") ensureIndex(); render(); }, 160);
+      st = setTimeout(() => { S.q = $("#search").value.trim(); syncUrl(); if (S.q && S.scope === "all") ensureIndex(); render(); smartSearch(S.q); }, 160);
     });
     $("#search-form").addEventListener("submit", (e) => { e.preventDefault(); $("#search").blur(); });
-    $("#search-clear").onclick = () => { $("#search").value = ""; S.q = ""; changed(); $("#search").focus(); };
+    $("#search-clear").onclick = () => { $("#search").value = ""; S.q = ""; aiSeq++; S.ai = null; S.aiState = ""; changed(); $("#search").focus(); };
     $("#scope").addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; S.scope = b.dataset.scope; syncUrl(); if (S.scope === "all") ensureIndex(); render(); });
 
     // tabs
