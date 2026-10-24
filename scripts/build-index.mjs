@@ -52,6 +52,8 @@ async function download(f) {
   throw new Error("could not download " + f.name);
 }
 
+// Themes: each photo gets the closest of these labels (or none), used by the "Themes" grouping.
+const THEMES = [["Beach and sea", "a beach or the sea"], ["Mountains and nature", "mountains, hills or a forest"], ["Sunsets and sky", "a sunset or the sky"], ["Snow", "snow"], ["Food", "a plate of food or a meal"], ["Cakes and celebrations", "a birthday cake or a party"], ["Weddings", "a wedding"], ["Festivals and temples", "a festival, temple or religious ceremony"], ["Pets and animals", "a pet dog, cat or other animal"], ["Flowers and plants", "flowers or plants"], ["Kids and babies", "a baby or small children"], ["Group photos", "a group of people posing together"], ["Portraits and selfies", "a portrait or selfie of a person"], ["Sports and games", "sports, a ball or a game"], ["Travel and landmarks", "a famous landmark or a city street"], ["Vehicles", "a car, bike, bus, train or plane"], ["At home", "the inside of a home"], ["Documents and screenshots", "a document, text or screenshot"]];
 const b64 = (a) => Buffer.from(a.buffer, a.byteOffset, a.byteLength).toString("base64");
 const quant = (v) => { let n = 0; for (const x of v) n += x * x; n = Math.sqrt(n) || 1; return Int8Array.from(v, (x) => Math.round((x / n) * 127)); };
 
@@ -89,5 +91,27 @@ if (todo.length) {
   }
   console.log(`Embedded ${done - failed}, skipped ${failed}.`);
 }
-fs.writeFileSync(OUT, JSON.stringify({ v: 2, model: MODEL, dim: 512, items }));
+let labels = [];
+if (!process.env.MOCK_EMBED && Object.keys(items).length) {
+  try {
+    const T = await import("@xenova/transformers");
+    const tok = await T.AutoTokenizer.from_pretrained(MODEL), tm = await T.CLIPTextModelWithProjection.from_pretrained(MODEL, { quantized: true });
+    const vecs = [];
+    for (const [, phrase] of THEMES) {
+      const prompts = ["a photo of " + phrase, "a close-up photo of " + phrase, "a photo with " + phrase + " in it"];
+      const { text_embeds } = await tm(tok(prompts, { padding: true, truncation: true })); const d = text_embeds.data, dim = d.length / 3, v = new Float32Array(dim);
+      for (let p = 0; p < 3; p++) { let n = 0; for (let i = 0; i < dim; i++) n += d[p * dim + i] ** 2; n = Math.sqrt(n); for (let i = 0; i < dim; i++) v[i] += d[p * dim + i] / n; }
+      let n = 0; for (const x of v) n += x * x; n = Math.sqrt(n); vecs.push(v.map((x) => x / n));
+    }
+    labels = THEMES.map(([name]) => name);
+    for (const it of Object.values(items)) {
+      const a = Int8Array.from(Buffer.from(it.e[0], "base64")); // whole-photo vector
+      const sc = vecs.map((v) => { let d = 0; for (let i = 0; i < a.length; i++) d += a[i] * v[i]; return (d / 127) * 100; });
+      const mx = Math.max(...sc), ex = sc.map((x) => Math.exp(x - mx)), sum = ex.reduce((p, c) => p + c, 0), best = ex.indexOf(1);
+      if (ex[best] / sum >= 0.4) it.t = best; else delete it.t;
+    }
+    console.log(`Themes: ${Object.values(items).filter((x) => x.t != null).length} photos labelled.`);
+  } catch (e) { console.warn("Themes skipped:", e.message); }
+}
+fs.writeFileSync(OUT, JSON.stringify({ v: 2, model: MODEL, dim: 512, labels, items }));
 console.log(`Wrote ${OUT} with ${Object.keys(items).length} photos.`);

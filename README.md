@@ -10,6 +10,7 @@ Live site: https://solomonyelcin.github.io/salvydocs/
 - **Browse** albums (sub-folders) with breadcrumbs. Photos are grouped by month in a mosaic, documents are listed as rows.
 - **Smart search**: type what is in a photo (for example `cat` or `beach`) and photos that look like it are found, even if the file name says nothing. The first smart search downloads a small AI model (about 60 MB, once). Photos are indexed automatically on every deploy and nightly; the set-up is in *Smart search* below.
 - **Search** by name or date (for example `september` or `2026`). Search this album, or switch to **Everywhere** to search every album. Press `/` to jump to the search box.
+- **Group by** day, month, year, **events** (photos taken close together), **places** (from the photo's location, named by city), **themes** (beach, food, pets and so on, found by the AI scan) or **your own groups**. Open the sliders button and choose *Group by*.
 - **Filter and sort** by type (Photos, Videos, Documents, Albums), by date (last 7 or 30 days, last 12 months, or a year), and by newest, oldest or name. Choose Mosaic, Grid or List layout and the thumbnail size.
 - **View** photos fitted to any screen, with zoom in/out/fit buttons (also wheel, double-click, double-tap or pinch), drag to pan, swipe or arrow keys to move on, a filmstrip, a details panel and a slideshow. **Videos** play in a built-in player (seek bar, speed, volume, loop, picture-in-picture, full screen, double-tap to skip 10 s). Videos the browser can't play, and documents, open in Google's own preview.
 - **Download** one file, or turn on **Select** (or long-press a photo on a phone), pick several and download them together. Google Docs, Sheets and Slides download as PDF, XLSX and PPTX.
@@ -58,3 +59,23 @@ In the repo, **Settings → Pages → Source** must be **GitHub Actions**.
 In the browser, `ai.js` turns the words typed into a vector with the same model and ranks the photos by similarity. If no index exists yet, search falls back to names and dates.
 The script sends the site address as the referrer, so the existing restricted API key works and no extra secret is needed.
 Run the **Deploy to GitHub Pages** workflow by hand from the Actions tab to index new photos straight away.
+
+## Your own groups (people, occasions)
+
+Edit `groups.json` in the repo to make groups such as a person or an occasion. A photo goes into the first group that matches it. Each group can use any of these:
+
+```json
+{
+  "groups": [
+    { "name": "Grandma", "files": ["<file id>", "<file id>"] },
+    { "name": "Wedding 2025", "folders": ["<album folder id>"] },
+    { "name": "Diwali", "match": ["diwali", "deepavali"] }
+  ]
+}
+```
+
+- `files`: Drive file IDs (the part after `/file/d/` in a file's link).
+- `folders`: album IDs (the part after `/folders/` in an album's link). Everything inside is included.
+- `match`: words that appear in the file name.
+
+Then choose *Group by, My groups*. Faces are never scanned, so people groups are the ones you name yourself.

@@ -374,3 +374,5 @@ body.selecting .toast{bottom:calc(88px + env(safe-area-inset-bottom))}
 }
 
 .linkbtn{color:var(--accent);text-decoration:underline;text-underline-offset:3px;font:inherit;padding:2px 0}
+.grp-h .gn{margin-left:8px;font-weight:500;font-size:.85em;color:var(--muted);font-variant-numeric:tabular-nums}
+.gnote{margin:14px 0;color:var(--muted);font-size:.92rem}

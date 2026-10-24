@@ -4,13 +4,14 @@
   const ROOT = { id: CFG.ROOT_FOLDER_ID, name: CFG.ROOT_NAME || "Gallery" };
   const API = "https://www.googleapis.com/drive/v3";
   const FOLDER = "application/vnd.google-apps.folder";
-  const FILE_FIELDS = "id,name,mimeType,thumbnailLink,modifiedTime,size,webViewLink,parents,imageMediaMetadata(width,height,time,rotation),videoMediaMetadata(width,height,durationMillis)";
+  const FILE_FIELDS = "id,name,mimeType,thumbnailLink,modifiedTime,size,webViewLink,parents,imageMediaMetadata(width,height,time,rotation,location(latitude,longitude)),videoMediaMetadata(width,height,durationMillis)";
   const LIST_FIELDS = "nextPageToken,files(" + FILE_FIELDS + ")";
   const PAGE = 160;            // tiles drawn at a time while scrolling
   const GAP = 4;
   const TYPE_KEY = { folder: "albums", image: "photos", video: "videos", doc: "docs" };
   const TYPES = ["all", "photos", "videos", "docs", "albums"];
   const SORTS = ["new", "old", "az", "za"];
+  const GROUPS = ["auto", "day", "month", "year", "event", "place", "theme", "custom", "none"];
 
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -29,6 +30,7 @@
   const S = {
     path: [ROOT], items: [], done: false, error: null, started: false, sig: "",
     type: "all", sort: store.get("dg-sort", "new"), date: "any", q: "", scope: "folder",
+    group: store.get("dg-group", "auto"), gmap: null, geff: "none", gcount: new Map(), glabels: new Map(),
     layout: store.get("dg-layout", "mosaic"), size: +store.get("dg-size", 2) || 2,
     view: [], order: [], map: new Map(), counts: {}, sec: {}, multi: false,
     shown: 0, groups: new Map(), secs: {}, gen: 0,
@@ -37,6 +39,8 @@
   };
   S.size = clamp(Math.round(S.size), 1, 3);
   if (!SORTS.includes(S.sort)) S.sort = "new";
+  if (!GROUPS.includes(S.group)) S.group = "auto";
+  const DEFAULT_GROUP = S.group;
   if (!["mosaic", "grid", "list"].includes(S.layout)) S.layout = "mosaic";
   const DEFAULT_SORT = S.sort;
 
@@ -259,6 +263,105 @@
     } catch { if (my === aiSeq) { S.aiState = ""; S.ai = null; render(); } }
   }
 
+  /* ---------- grouping ---------- */
+  const DAY = 864e5, EVENT_GAP = 6 * 36e5;
+  const groupData = { names: new Map(), asked: new Set(), themes: null, themesBusy: false, custom: null, customBusy: false, geoQ: [], geoBusy: false, timer: 0 };
+  try { for (const [k, v] of Object.entries(JSON.parse(localStorage.getItem("dg-places") || "{}"))) groupData.names.set(k, v); } catch { /* ignore */ }
+  const effGroup = () => (S.ranked ? "none" : S.group === "auto" ? (S.sort === "new" || S.sort === "old" ? "month" : "none") : S.group);
+  const dayStart = (t) => { const d = new Date(t); return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); };
+  const fmtDay = (t) => new Date(t).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "long", year: "numeric" });
+  const placeCell = (f) => { const l = f.imageMediaMetadata?.location; return l && isFinite(l.latitude) ? Math.round(l.latitude / 0.25) + "_" + Math.round(l.longitude / 0.25) : null; };
+
+  function scheduleRender() { clearTimeout(groupData.timer); groupData.timer = setTimeout(() => render(), 250); }
+  async function geocode() {
+    if (groupData.geoBusy) return; groupData.geoBusy = true;
+    while (groupData.geoQ.length) {
+      const [cell, lat, lng] = groupData.geoQ.shift();
+      try {
+        const r = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lng}&localityLanguage=en`);
+        const j = r.ok ? await r.json() : null;
+        const name = j && (j.city || j.locality || j.principalSubdivision) ? [j.city || j.locality, j.principalSubdivision && j.principalSubdivision !== (j.city || j.locality) ? j.principalSubdivision : ""].filter(Boolean).join(", ") : "";
+        if (name) groupData.names.set(cell, name);
+      } catch { /* leave unnamed */ }
+      if (!groupData.geoQ.length || groupData.geoQ.length % 6 === 0) { try { localStorage.setItem("dg-places", JSON.stringify(Object.fromEntries(groupData.names))); } catch { /* ignore */ } scheduleRender(); }
+      await sleep(180);
+    }
+    groupData.geoBusy = false;
+  }
+  function ensureGroupData(g, me) {
+    if (g === "place") {
+      for (const f of me) { const c = placeCell(f); if (c && !groupData.names.has(c) && !groupData.asked.has(c)) { groupData.asked.add(c); const l = f.imageMediaMetadata.location; groupData.geoQ.push([c, l.latitude, l.longitude]); } }
+      if (groupData.geoQ.length) geocode();
+    } else if (g === "theme" && !groupData.themes && !groupData.themesBusy && window.SmartSearch) {
+      groupData.themesBusy = true;
+      SmartSearch.themes().then((m) => { groupData.themes = m || new Map(); }).catch(() => { groupData.themes = new Map(); }).finally(() => { groupData.themesBusy = false; scheduleRender(); });
+    } else if (g === "custom" && !groupData.custom && !groupData.customBusy) {
+      groupData.customBusy = true;
+      fetch("groups.json", { cache: "no-cache" }).then((r) => (r.ok ? r.json() : null)).then((j) => { groupData.custom = Array.isArray(j?.groups) ? j.groups : []; }).catch(() => { groupData.custom = []; }).finally(() => { groupData.customBusy = false; scheduleRender(); });
+    }
+  }
+  function inFolder(id, anc) { for (let p = id, n = 0; p && n < 40; n++) { if (p === anc) return true; p = known.get(p)?.parent; } return false; }
+
+  // Assigns every photo and video a group and puts the group's items next to each other.
+  function groupMedia(me) {
+    const g = effGroup(); S.geff = g; S.gmap = null; S.gcount = new Map(); S.glabels = new Map(); S.gnote = "";
+    if (g === "none" || !me.length) return me;
+    ensureGroupData(g, me);
+    const dir = S.sort === "old" ? 1 : -1; // time-ordered groups follow the sort direction
+    const A = new Map(); // id -> { k, l, o }
+    const asg = (f, k, l, o) => A.set(f.id, { k, l, o });
+    if (g === "day" || g === "month" || g === "year") {
+      for (const f of me) {
+        const d = new Date(f._t);
+        if (g === "day") { const s = dayStart(f._t); asg(f, "d" + s, fmtDay(f._t), dir * s); }
+        else if (g === "month") { const s = new Date(d.getFullYear(), d.getMonth(), 1).getTime(); asg(f, "m" + s, fmtMonth(f._t), dir * s); }
+        else { const s = new Date(d.getFullYear(), 0, 1).getTime(); asg(f, "y" + s, String(d.getFullYear()), dir * s); }
+      }
+    } else if (g === "event") {
+      const byT = [...me].sort((a, b) => a._t - b._t); let cl = [], last = 0;
+      const close = () => {
+        if (!cl.length) return; const a = cl[0]._t, b = cl.at(-1)._t, da = dayStart(a), db = dayStart(b);
+        const label = da === db ? fmtDay(a) : `${new Date(a).toLocaleDateString(undefined, { day: "numeric", month: "short" })} to ${new Date(b).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}`;
+        for (const f of cl) asg(f, "e" + a, label, dir * a); cl = [];
+      };
+      for (const f of byT) { if (cl.length && f._t - last > EVENT_GAP) close(); cl.push(f); last = f._t; } close();
+      S.gnote = "Events are photos taken within a few hours of each other.";
+    } else if (g === "place") {
+      let any = false;
+      for (const f of me) {
+        const c = placeCell(f);
+        if (!c) { asg(f, "none", "No location", Infinity); continue; }
+        any = true; const n = groupData.names.get(c);
+        asg(f, n ? "n:" + n : "c:" + c, n || "Finding place name…", 0);
+      }
+      if (!any) S.gnote = "None of these photos carry location data.";
+    } else if (g === "theme") {
+      if (!groupData.themes) { for (const f of me) asg(f, "load", "Working out themes…", 0); }
+      else {
+        for (const f of me) { const t = groupData.themes.get(f.id); asg(f, t ? "t:" + t : "other", t || "Other", 0); }
+        if (!groupData.themes.size) S.gnote = "Themes appear once the photo index is built (it updates every night).";
+      }
+    } else if (g === "custom") {
+      const rules = groupData.custom;
+      if (!rules) { for (const f of me) asg(f, "load", "Loading your groups…", 0); }
+      else {
+        for (const f of me) {
+          const i = rules.findIndex((r) => (r.files || []).includes(f.id) || (r.folders || []).some((d) => f.parents?.some((p) => inFolder(p, d))) || (r.match || []).some((m) => f._lc.includes(String(m).toLowerCase())));
+          if (i >= 0) asg(f, "g" + i, rules[i].name || "Group " + (i + 1), i); else asg(f, "rest", "Everything else", Infinity);
+        }
+        if (!rules.length) S.gnote = "No custom groups yet. Add them in groups.json (see the README).";
+      }
+    }
+    const buckets = new Map();
+    for (const f of me) { const a = A.get(f.id); let b = buckets.get(a.k); if (!b) buckets.set(a.k, (b = { ...a, items: [] })); b.items.push(f); }
+    let list = [...buckets.values()];
+    if (g === "place" || g === "theme") list.sort((x, y) => (x.o === Infinity) - (y.o === Infinity) || (x.k === "other") - (y.k === "other") || y.items.length - x.items.length || coll.compare(x.l, y.l));
+    else list.sort((x, y) => (x.o === Infinity) - (y.o === Infinity) || x.o - y.o);
+    S.gmap = new Map(); const out = [];
+    for (const b of list) { S.gcount.set(b.k, b.items.length); S.glabels.set(b.k, b.l); for (const f of b.items) { S.gmap.set(f.id, b.k); out.push(f); } }
+    return out;
+  }
+
   /* ---------- filtering ---------- */
   function baseList() { return S.q && S.scope === "all" ? (S.index ? S.index.items : []) : S.items; }
   function dateRange() {
@@ -300,8 +403,9 @@
     }[S.sort];
     out.sort(ai ? (a, b) => (b._rank || 0) - (a._rank || 0) || cmp(a, b) : cmp);
     S.ranked = !!ai;
-    const fo = [], me = [], dc = [];
-    for (const f of out) (f._k === "folder" ? fo : f._k === "doc" ? dc : me).push(f);
+    const fo = [], me0 = [], dc = [];
+    for (const f of out) (f._k === "folder" ? fo : f._k === "doc" ? dc : me0).push(f);
+    const me = groupMedia(me0);
     S.view = out; S.order = [...fo, ...me, ...dc];
     S.sec = { folder: fo.length, media: me.length, doc: dc.length };
     S.multi = (fo.length > 0) + (me.length > 0) + (dc.length > 0) > 1;
@@ -322,6 +426,7 @@
     c.className = "content layout-" + S.layout + (S.multi || S.q ? "" : " no-heads");
     applySizes();
     paintStatus();
+    if (S.gnote && S.sec.media) { const n = el("p", "gnote"); n.textContent = S.gnote; c.append(n); }
     if (!S.order.length) return;
     appendMore(Math.max(PAGE, keep));
     watchSentinel();
@@ -361,12 +466,11 @@
       s.body.append(tileEl(f)); return;
     }
     const s = section("media", S.mediaTitle, S.sec.media);
-    const dated = !S.ranked && (S.sort === "new" || S.sort === "old");
-    const key = dated ? new Date(f._t).getFullYear() + "-" + new Date(f._t).getMonth() : "all";
+    const key = S.gmap ? S.gmap.get(f.id) : "all";
     let g = S.groups.get(key);
     if (!g) {
       const e = el("div", "grp " + S.layout);
-      if (dated) { const h = el("h3", "grp-h"); h.textContent = fmtMonth(f._t); e.append(h); }
+      if (S.gmap) { const h = el("h3", "grp-h"); h.append(S.glabels.get(key) || ""); const n = el("span", "gn"); n.textContent = (S.gcount.get(key) || 0).toLocaleString(); h.append(n); e.append(h); }
       const body = el("div", "grp-body" + (S.layout === "list" ? " rows" : "")); e.append(body);
       s.body.append(e); g = { el: e, body, tiles: [] }; S.groups.set(key, g);
     }
@@ -501,7 +605,7 @@
     $("#scope").hidden = !searching;
     for (const b of $$("#scope button")) b.setAttribute("aria-pressed", String(b.dataset.scope === S.scope));
     $("#active-row").hidden = !searching && !tags.children.length;
-    $("#filters-dot").hidden = S.date === "any" && S.sort === DEFAULT_SORT;
+    $("#filters-dot").hidden = S.date === "any" && S.sort === DEFAULT_SORT && S.group === DEFAULT_GROUP;
     $("#btn-slideshow").hidden = !S.order.some((f) => f._k === "image");
     $("#search-clear").hidden = !$("#search").value;
     paintReel();
@@ -544,15 +648,16 @@
   const normHash = () => {
     const p = new URLSearchParams(location.hash.replace(/^#/, ""));
     const t = p.get("t"), s = p.get("s");
-    return { d: p.get("d") || ROOT.id, t: TYPES.includes(t) ? t : "all", q: (p.get("q") || "").slice(0, 120), s: SORTS.includes(s) ? s : DEFAULT_SORT, r: p.get("r") || "any", scope: p.get("in") === "all" ? "all" : "folder", f: p.get("f") };
+    return { d: p.get("d") || ROOT.id, t: TYPES.includes(t) ? t : "all", q: (p.get("q") || "").slice(0, 120), s: SORTS.includes(s) ? s : DEFAULT_SORT, g: GROUPS.includes(p.get("g")) ? p.get("g") : DEFAULT_GROUP, r: p.get("r") || "any", scope: p.get("in") === "all" ? "all" : "folder", f: p.get("f") };
   };
-  const curSig = () => [S.path.at(-1).id, S.type, S.q, S.sort, S.date, S.q && S.scope === "all" ? "all" : "folder"].join("|");
+  const curSig = () => [S.path.at(-1).id, S.type, S.q, S.sort, S.group, S.date, S.q && S.scope === "all" ? "all" : "folder"].join("|");
   function hashFor(o = {}) {
     const p = new URLSearchParams(); const d = o.d ?? S.path.at(-1).id;
     if (d !== ROOT.id) p.set("d", d);
     if (S.type !== "all") p.set("t", S.type);
     if (S.q) p.set("q", S.q);
     if (S.sort !== DEFAULT_SORT) p.set("s", S.sort);
+    if (S.group !== DEFAULT_GROUP) p.set("g", S.group);
     if (S.date !== "any") p.set("r", S.date);
     if (S.q && S.scope === "all") p.set("in", "all");
     if (o.f) p.set("f", o.f);
@@ -565,10 +670,10 @@
 
   async function applyHash() {
     const h = normHash();
-    const sig = [h.d, h.t, h.q, h.s, h.r, h.q && h.scope === "all" ? "all" : "folder"].join("|");
+    const sig = [h.d, h.t, h.q, h.s, h.g, h.r, h.q && h.scope === "all" ? "all" : "folder"].join("|");
     if (sig !== S.sig || !S.started) {
       const newFolder = h.d !== S.path.at(-1).id || !S.started;
-      S.sig = sig; S.type = h.t; S.q = h.q; S.sort = h.s; S.date = /^(any|7|30|365|y\d{4})$/.test(h.r) ? h.r : "any"; S.scope = h.scope;
+      S.sig = sig; S.type = h.t; S.q = h.q; S.sort = h.s; S.group = h.g; S.date = /^(any|7|30|365|y\d{4})$/.test(h.r) ? h.r : "any"; S.scope = h.scope;
       $("#search").value = S.q;
       if (newFolder) await loadFolder(h.d); else render();
       S.started = true; smartSearch(S.q);
@@ -1023,7 +1128,7 @@
     const years = [...new Set(baseList().map((f) => new Date(f._t).getFullYear()))].filter((y) => y > 1990).sort((a, b) => b - a);
     dates.innerHTML = `<option value="any">Any time</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="365">Last 12 months</option>` + years.map((y) => `<option value="y${y}">${y}</option>`).join("");
     dates.value = [...dates.options].some((o) => o.value === S.date) ? S.date : "any";
-    $("#f-sort").value = S.sort; $("#f-size").value = S.size;
+    $("#f-sort").value = S.sort; $("#f-group").value = S.group; $("#f-size").value = S.size;
     $$("#f-layout button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.layout === S.layout)));
     $("#sheet").hidden = false; $("#btn-filters").setAttribute("aria-expanded", "true"); $("#f-sort").focus();
   }
@@ -1093,6 +1198,7 @@
     $("#btn-select").onclick = () => { if (S.select) endSelect(); else { S.select = true; updateSel(); } };
     $("#btn-filters").onclick = () => ($("#sheet").hidden ? openFilters() : closeFilters());
     $$("#sheet [data-close]").forEach((b) => (b.onclick = closeFilters));
+    $("#f-group").onchange = (e) => { S.group = e.target.value; store.set("dg-group", S.group); S.shown = 0; changed(); };
     $("#f-sort").onchange = (e) => { S.sort = e.target.value; store.set("dg-sort", S.sort); changed(); };
     $("#f-date").onchange = (e) => { S.date = e.target.value; changed(); };
     $("#f-size").oninput = (e) => { S.size = +e.target.value; store.set("dg-size", S.size); render(); };
@@ -1100,7 +1206,7 @@
       const b = e.target.closest("button"); if (!b) return; S.layout = b.dataset.layout; store.set("dg-layout", S.layout);
       $$("#f-layout button").forEach((x) => x.setAttribute("aria-pressed", String(x === b))); S.shown = 0; render();
     });
-    $("#f-reset").onclick = () => { S.sort = "new"; S.date = "any"; S.size = 2; S.layout = "mosaic"; store.set("dg-sort", "new"); store.set("dg-size", 2); store.set("dg-layout", "mosaic"); S.shown = 0; changed(); openFilters(); };
+    $("#f-reset").onclick = () => { S.group = "auto"; store.set("dg-group", "auto"); S.sort = "new"; S.date = "any"; S.size = 2; S.layout = "mosaic"; store.set("dg-sort", "new"); store.set("dg-size", 2); store.set("dg-layout", "mosaic"); S.shown = 0; changed(); openFilters(); };
 
     // selection bar
     $("#sel-done").onclick = endSelect;

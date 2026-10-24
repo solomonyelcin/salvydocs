@@ -3,13 +3,13 @@
 (function () {
   const MODEL = "Xenova/clip-vit-base-patch32", LIB = "https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2";
   const MIN = 0.2, Z = [2.4, 1.6], CAP = [48, 200]; // how far above the typical photo a match must score: strict, then broader
-  let indexP = null, modelP = null; const cache = new Map();
+  let indexP = null, modelP = null, themeMap = new Map(); const cache = new Map();
 
   function loadIndex() {
     return (indexP ||= fetch("search-index.json", { cache: "no-cache" }).then((r) => (r.ok ? r.json() : null)).then((j) => {
       if (!j || j.model !== MODEL || j.v !== 2 || !j.items) return null;
-      const m = new Map();
-      for (const [id, o] of Object.entries(j.items)) m.set(id, o.e.map((b) => { const s = atob(b), a = new Int8Array(s.length); for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i) << 24 >> 24; return a; }));
+      const m = new Map(); themeMap = new Map();
+      for (const [id, o] of Object.entries(j.items)) { if (o.t != null && j.labels?.[o.t]) themeMap.set(id, j.labels[o.t]); m.set(id, o.e.map((b) => { const s = atob(b), a = new Int8Array(s.length); for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i) << 24 >> 24; return a; })); }
       return m.size ? m : null;
     }).catch(() => null));
   }
@@ -50,6 +50,8 @@
 
   window.SmartSearch = {
     // true when a search index has been built for this site
+    // Map(fileId -> theme name) from the pre-built index, or null when there is no index
+    themes: async () => ((await loadIndex()) ? themeMap : null),
     available: async () => !!(await loadIndex()),
     // returns Map(fileId -> score) of photos that look like the words, or null when smart search can't run
     async search(q, onStatus, more = false) {
