@@ -774,7 +774,7 @@
 
   function closeViewer(fromPop) {
     if (V.el.hidden) return;
-    stopPlay(); V.el.hidden = true; document.body.classList.remove("lock");
+    closeEditor(); stopPlay(); V.el.hidden = true; document.body.classList.remove("lock");
     inertEls().forEach((e) => (e.inert = false));
     teardown(); $("#v-panel").hidden = true; V.info = false; $("#v-info").setAttribute("aria-pressed", "false");
     if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
@@ -798,6 +798,7 @@
     $("#v-name").textContent = f.name;
     $("#v-sub").textContent = `${i + 1} of ${V.list.length}, ${fmtDate(f._t)}`;
     $("#v-prev").hidden = i === 0; $("#v-next").hidden = i === V.list.length - 1;
+    $("#v-edit").hidden = !(EDIT.api && f._k === "image");
     paintStrip(); if (V.info) paintInfo(f);
     if (location.hash !== hashFor({ f: f.id }) && !V.el.hidden) history.replaceState(null, "", hashFor({ f: f.id }));
     wake();
@@ -1120,6 +1121,71 @@
     if (i >= 0) showViewer(list, i, { push: false }); else showViewer([f], 0, { push: false });
   }
 
+
+  /* ---------- AI edit ---------- */
+  const EDIT = { api: (CFG.EDIT_API || "").replace(/\/$/, ""), open: false, busy: false, stack: [], f: null };
+  const EDIT_IDEAS = ["Remove the background", "Make it black and white", "Brighten and enhance colours", "Turn it into a painting", "Make the sky a golden sunset", "Remove people in the background"];
+  const edEl = () => $("#ed");
+
+  // Reads the photo, shrinks it and returns { blob, mime, b64 } ready to send.
+  async function edPrepare(src) {
+    const blob = typeof src === "string" ? await (await fetch(src)).blob() : src;
+    const url = URL.createObjectURL(blob);
+    try {
+      const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error("decode")); i.src = url; });
+      const k = Math.min(1, 1600 / Math.max(img.naturalWidth, img.naturalHeight)), w = Math.round(img.naturalWidth * k), h = Math.round(img.naturalHeight * k);
+      const c = document.createElement("canvas"); c.width = w; c.height = h; c.getContext("2d").drawImage(img, 0, 0, w, h);
+      const out = await new Promise((res) => c.toBlob(res, "image/jpeg", 0.9));
+      const b64 = await new Promise((res) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1]); r.readAsDataURL(out); });
+      return { blob: out, mime: "image/jpeg", b64 };
+    } finally { URL.revokeObjectURL(url); }
+  }
+  function edShow() {
+    const cur = EDIT.stack.at(-1); $("#ed-img").src = cur.url;
+    const n = EDIT.stack.length - 1;
+    $("#ed-acts").hidden = n === 0; $("#ed-ver").textContent = n ? `Edit ${n}` : "Original";
+    $("#ed-undo").disabled = n === 0;
+  }
+  function edNote(t, bad) { const n = $("#ed-note"); n.textContent = t; n.classList.toggle("bad", !!bad); }
+  async function openEditor() {
+    const f = V.list[V.idx]; if (!EDIT.api || !f || f._k !== "image" || EDIT.open) return;
+    EDIT.open = true; EDIT.f = f; EDIT.stack = []; stopPlay();
+    edEl().hidden = false; $("#ed-prompt").value = ""; $("#ed-prompt").focus({ preventScroll: true });
+    $("#ed-acts").hidden = true; $("#ed-ver").textContent = ""; edNote("Edits are made by AI on a copy of the photo. Your original in Drive is never changed.");
+    $("#ed-img").removeAttribute("src"); $("#ed-busy").hidden = false; $("#ed-busy p").textContent = "Loading your photo…";
+    try {
+      const o = await edPrepare(mediaUrl(f));
+      if (!EDIT.open || EDIT.f !== f) return;
+      EDIT.stack = [{ url: URL.createObjectURL(o.blob), blob: o.blob, mime: o.mime, b64: o.b64 }]; edShow();
+    } catch { edNote("Couldn't load this photo for editing. Check your connection and try again.", true); }
+    $("#ed-busy").hidden = true;
+  }
+  function closeEditor() {
+    if (!EDIT.open) return; EDIT.open = false; edEl().hidden = true;
+    for (const s of EDIT.stack) URL.revokeObjectURL(s.url); EDIT.stack = []; EDIT.f = null; V.opener && $("#v-edit").focus({ preventScroll: true });
+  }
+  async function runEdit() {
+    const prompt = $("#ed-prompt").value.trim(); const cur = EDIT.stack.at(-1);
+    if (EDIT.busy || !cur) return; if (!prompt) { edNote("Describe the change you want first.", true); $("#ed-prompt").focus(); return; }
+    EDIT.busy = true; $("#ed-go").disabled = true; $("#ed-busy").hidden = false; $("#ed-busy p").textContent = "Editing your photo. This takes 10 to 30 seconds."; edNote("");
+    try {
+      const pass = store.get("dg-edit-pass", "");
+      const r = await fetch(EDIT.api + "/edit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt, image: cur.b64, mimeType: cur.mime, passcode: pass }) });
+      const j = await r.json().catch(() => ({}));
+      if (r.status === 401) { $("#ed-pass").hidden = false; $("#ed-pass").focus(); edNote(pass ? "That passcode isn't right." : "Enter the passcode to use AI edit.", true); return; }
+      if (!r.ok) { edNote(j.message || "Couldn't edit this photo. Try again.", true); return; }
+      const bin = Uint8Array.from(atob(j.image), (c) => c.charCodeAt(0)), blob = new Blob([bin], { type: j.mimeType || "image/png" });
+      // the next edit starts from this result, so keep it small like the original
+      const next = await edPrepare(blob);
+      EDIT.stack.push({ url: URL.createObjectURL(blob), blob, mime: next.mime, b64: next.b64, full: blob }); edShow();
+      $("#ed-prompt").value = ""; edNote(j.text ? j.text : "Done. Describe another change to keep editing, or download it.");
+    } catch { edNote("Couldn't reach the edit service. Check your connection and try again.", true); }
+    finally { EDIT.busy = false; $("#ed-go").disabled = false; $("#ed-busy").hidden = true; }
+  }
+  const edFile = () => { const cur = EDIT.stack.at(-1), base = (EDIT.f?.name || "photo").replace(/\.[^.]+$/, ""); return new File([cur.blob], `${base}-edited.${(cur.blob.type.split("/")[1] || "png").replace("jpeg", "jpg")}`, { type: cur.blob.type }); };
+  function edDownload() { const f = edFile(), a = el("a"); a.href = URL.createObjectURL(f); a.download = f.name; document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000); }
+  async function edShare() { const f = edFile(); try { if (navigator.canShare?.({ files: [f] })) { await navigator.share({ files: [f], title: f.name }); return; } } catch (e) { if (e.name === "AbortError") return; } edDownload(); }
+
   /* ---------- UI wiring ---------- */
   function applyTheme(t) { document.documentElement.dataset.theme = t; store.set("dg-theme", t); }
 
@@ -1221,6 +1287,15 @@
     $("#v-share").onclick = () => { const f = V.list[V.idx]; shareLink(fileUrl(f), f.name); };
     $("#v-download").onclick = () => downloadFiles([V.list[V.idx]]);
     if (document.fullscreenEnabled) $("#v-full").onclick = toggleFS; else $("#v-full").hidden = true;
+    $("#v-edit").onclick = openEditor; $("#ed-close").onclick = closeEditor;
+    $("#ed-chips").append(...EDIT_IDEAS.map((t) => { const b = el("button", "chip"); b.type = "button"; b.textContent = t; b.onclick = () => { $("#ed-prompt").value = t; $("#ed-prompt").focus(); }; return b; }));
+    $("#ed-form").addEventListener("submit", (e) => { e.preventDefault(); if (!$("#ed-pass").hidden) store.set("dg-edit-pass", $("#ed-pass").value); runEdit(); });
+    $("#ed-prompt").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#ed-form").requestSubmit(); } });
+    $("#ed-undo").onclick = () => { if (EDIT.stack.length > 1) { URL.revokeObjectURL(EDIT.stack.pop().url); edShow(); edNote(""); } };
+    $("#ed-dl").onclick = edDownload; $("#ed-share").onclick = edShare;
+    const showOrig = (on) => { if (EDIT.stack.length > 1) $("#ed-img").src = EDIT.stack[on ? 0 : EDIT.stack.length - 1].url; };
+    const cmp = $("#ed-compare"); for (const [ev, on] of [["pointerdown", true], ["pointerup", false], ["pointerleave", false], ["pointercancel", false]]) cmp.addEventListener(ev, () => showOrig(on));
+    cmp.addEventListener("keydown", (e) => { if (e.key === " " || e.key === "Enter") showOrig(true); }); cmp.addEventListener("keyup", () => showOrig(false));
     $("#v-zin").onclick = () => zoomBy(1.5); $("#v-zout").onclick = () => zoomBy(1 / 1.5); $("#v-zreset").onclick = zoomReset;
     $("#v-strip").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) go(+b.dataset.i); });
 
@@ -1228,6 +1303,7 @@
     document.addEventListener("keydown", (e) => {
       const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName);
       if (!V.el.hidden) {
+        if (EDIT.open) { if (e.key === "Escape") { closeEditor(); e.preventDefault(); } return; }
         const k = e.key, inBar = !!e.target.closest?.(".vp-bar"), onRange = e.target.type === "range";
         if (e.ctrlKey || e.metaKey || e.altKey) return;
         if (k === "Escape") { if (!document.fullscreenElement) closeViewer(); wake(); return; }
@@ -1249,6 +1325,7 @@
         else if (isImg && V.Z.s > 1.02 && /^Arrow/.test(k)) { e.preventDefault(); panBy(k === "ArrowLeft" ? 90 : k === "ArrowRight" ? -90 : 0, k === "ArrowUp" ? 90 : k === "ArrowDown" ? -90 : 0); }
         else if (k === "i" || k === "I") toggleInfo();
         else if (k === "p" || k === "P") togglePlay();
+        else if ((k === "e" || k === "E") && !$("#v-edit").hidden) openEditor();
         else if (k === "d" || k === "D") downloadFiles([V.list[V.idx]]);
         else if ((k === "f" || k === "F") && (document.fullscreenEnabled || V.vid?.webkitEnterFullscreen)) toggleFS();
         else if (isImg && (k === "+" || k === "=")) zoomBy(1.4);

@@ -1,0 +1,19 @@
+name = "salvydocs-edit"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+[vars]
+ALLOWED_ORIGIN = "https://solomonyelcin.github.io"
+DAILY_PER_PERSON = "15"
+DAILY_TOTAL = "150"
+# MODEL = "gemini-2.5-flash-image"
+
+# Optional but recommended: a KV namespace for the daily limits.
+#   npx wrangler kv namespace create LIMITS   (then paste the id below and remove the leading #)
+# [[kv_namespaces]]
+# binding = "LIMITS"
+# id = "PASTE_ID_HERE"
+
+# Secrets (never put these in this file):
+#   npx wrangler secret put GEMINI_API_KEY
+#   npx wrangler secret put PASSCODE

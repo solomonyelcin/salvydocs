@@ -50,6 +50,8 @@
   <symbol id="i-fwd10" viewBox="0 0 24 24"><path d="M19 5v4.5h-4.5"/><path d="M18.4 9.5A8 8 0 1012 20"/><path d="M9.8 12.2v4.4M13 12.2h2.4v4.4H13z" stroke-width="1.4"/></symbol>
   <symbol id="i-shrink" viewBox="0 0 24 24"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/></symbol>
   <symbol id="i-replay" viewBox="0 0 24 24"><path d="M4.5 12a7.5 7.5 0 112.3 5.4"/><path d="M4.5 6.5V12H10"/></symbol>
+  <symbol id="i-wand" viewBox="0 0 24 24"><path d="M5 19L16 8"/><path d="M14.5 6.5l3 3"/><path d="M18 3v3M16.5 4.5h3M5 5v2M4 6h2M19 14v2M18 15h2"/></symbol>
+  <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-3"/></symbol>
   <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></symbol>
   <symbol id="i-image" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="3"/><circle cx="9" cy="9" r="1.7"/><path d="M20.5 16l-5-5-8 8.5"/></symbol>
   <symbol id="i-video" viewBox="0 0 24 24"><rect x="3.5" y="5.5" width="17" height="13" rx="3"/><path d="M10.5 9.5v5l4-2.5z"/></symbol>
@@ -186,6 +188,7 @@
     <div class="v-title"><div class="v-name" id="v-name"></div><div class="v-sub" id="v-sub"></div></div>
     <div class="v-actions">
       <button class="vbtn hide-s" id="v-play" type="button" aria-label="Start slideshow" title="Slideshow (P)"><svg class="i"><use href="#i-play"/></svg></button>
+      <button class="vbtn" id="v-edit" type="button" aria-label="Edit with AI" title="Edit with AI (E)" hidden><svg class="i"><use href="#i-wand"/></svg></button>
       <button class="vbtn" id="v-info" type="button" aria-label="Details" aria-pressed="false" title="Details (I)"><svg class="i"><use href="#i-info"/></svg></button>
       <button class="vbtn" id="v-share" type="button" aria-label="Share" title="Share"><svg class="i"><use href="#i-share"/></svg></button>
       <button class="vbtn" id="v-download" type="button" aria-label="Download" title="Download (D)"><svg class="i"><use href="#i-download"/></svg></button>
@@ -202,6 +205,32 @@
   <button class="v-nav next" id="v-next" type="button" aria-label="Next"><svg class="i"><use href="#i-right"/></svg></button>
   <div class="v-strip" id="v-strip" aria-hidden="true"></div>
   <aside class="v-panel" id="v-panel" hidden aria-label="Details"></aside>
+  <section class="ed" id="ed" hidden role="dialog" aria-modal="true" aria-labelledby="ed-h">
+    <div class="ed-top">
+      <button class="vbtn" id="ed-close" type="button" aria-label="Close editor"><svg class="i"><use href="#i-x"/></svg></button>
+      <strong id="ed-h">Edit with AI</strong>
+      <span class="ed-ver" id="ed-ver"></span>
+    </div>
+    <div class="ed-stage" id="ed-stage">
+      <img id="ed-img" alt="Photo being edited" draggable="false">
+      <div class="ed-busy" id="ed-busy" hidden><div class="v-spin"></div><p>Editing your photo. This takes 10 to 30 seconds.</p></div>
+    </div>
+    <div class="ed-panel">
+      <div class="ed-chips" id="ed-chips"></div>
+      <form class="ed-form" id="ed-form" autocomplete="off">
+        <textarea id="ed-prompt" rows="2" maxlength="500" placeholder="Describe the edit, e.g. make the sky a sunset" aria-label="Describe the edit"></textarea>
+        <input id="ed-pass" type="password" placeholder="Passcode" aria-label="Passcode" autocomplete="off" hidden>
+        <button class="btn primary" id="ed-go" type="submit"><svg class="i"><use href="#i-wand"/></svg>Edit</button>
+      </form>
+      <div class="ed-acts" id="ed-acts" hidden>
+        <button class="btn sm" id="ed-compare" type="button">Hold to see original</button>
+        <button class="btn sm" id="ed-undo" type="button"><svg class="i"><use href="#i-undo"/></svg>Undo</button>
+        <button class="btn sm" id="ed-share" type="button"><svg class="i"><use href="#i-share"/></svg>Share</button>
+        <button class="btn sm primary" id="ed-dl" type="button"><svg class="i"><use href="#i-download"/></svg>Download</button>
+      </div>
+      <p class="ed-note" id="ed-note" role="status" aria-live="polite">Edits are made by AI on a copy of the photo. Your original in Drive is never changed.</p>
+    </div>
+  </section>
 </div>
 
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>

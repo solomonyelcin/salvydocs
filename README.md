@@ -13,6 +13,7 @@ Live site: https://solomonyelcin.github.io/salvydocs/
 - **Group by** day, month, year, **events** (photos taken close together), **places** (from the photo's location, named by city), **themes** (beach, food, pets and so on, found by the AI scan) or **your own groups**. Open the sliders button and choose *Group by*.
 - **Filter and sort** by type (Photos, Videos, Documents, Albums), by date (last 7 or 30 days, last 12 months, or a year), and by newest, oldest or name. Choose Mosaic, Grid or List layout and the thumbnail size.
 - **View** photos fitted to any screen, with zoom in/out/fit buttons (also wheel, double-click, double-tap or pinch), drag to pan, swipe or arrow keys to move on, a filmstrip, a details panel and a slideshow. **Videos** play in a built-in player (seek bar, speed, volume, loop, picture-in-picture, full screen, double-tap to skip 10 s). Videos the browser can't play, and documents, open in Google's own preview.
+- **Edit with AI**: in the photo viewer, tap the magic wand, describe a change ("remove the background", "make the sky a sunset"), and download the result. The original in Drive is never changed. This needs the small edit service in `worker/` (set-up steps in `worker/README.md`); until then the button is hidden.
 - **Download** one file, or turn on **Select** (or long-press a photo on a phone), pick several and download them together. Google Docs, Sheets and Slides download as PDF, XLSX and PPTX.
 - **Share** an album or a single photo. Every view has its own link, and the Back button works as expected. On phones, Share opens the system share sheet.
 - Works on phones, tablets and desktops, in light and dark themes, with keyboard support.
@@ -51,6 +52,7 @@ In the repo, **Settings → Pages → Source** must be **GitHub Actions**.
 ## Settings in `config.js`
 
 - `ROOT_FOLDER_ID`, `ROOT_NAME`: the folder to show and the name displayed as the title.
+- `EDIT_API` (optional): address of the AI edit service. Empty hides the Edit button.
 - `TAGLINE` (optional): the line under the title on the main page.
 
 ## Smart search
