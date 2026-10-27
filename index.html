@@ -5,8 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Salvius Memories</title>
 <meta name="description" content="Photos, videos and documents from Salvius Memories.">
-<meta name="theme-color" content="#eef2f3" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#07121c" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#eef2f3" id="meta-theme">
 <meta property="og:title" content="Salvius Memories">
 <meta property="og:description" content="Photos, videos and documents from Salvius Memories.">
 <meta property="og:type" content="website">
@@ -15,7 +14,11 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Public+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <script>
-  try { var t = localStorage.getItem("dg-theme"); if (!t) t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"; document.documentElement.dataset.theme = t; } catch (e) {}
+  try {
+    var d = document.documentElement, m = localStorage.getItem("dg-mode") || localStorage.getItem("dg-theme") || "auto";
+    d.dataset.mode = m; d.dataset.theme = m === "auto" ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : m;
+    d.dataset.palette = localStorage.getItem("dg-palette") || "cyanotype";
+  } catch (e) {}
 </script>
 <link rel="stylesheet" href="style.css">
 </head>
@@ -52,6 +55,7 @@
   <symbol id="i-replay" viewBox="0 0 24 24"><path d="M4.5 12a7.5 7.5 0 112.3 5.4"/><path d="M4.5 6.5V12H10"/></symbol>
   <symbol id="i-wand" viewBox="0 0 24 24"><path d="M5 19L16 8"/><path d="M14.5 6.5l3 3"/><path d="M18 3v3M16.5 4.5h3M5 5v2M4 6h2M19 14v2M18 15h2"/></symbol>
   <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-3"/></symbol>
+  <symbol id="i-palette" viewBox="0 0 24 24"><path d="M12 3.5a8.5 8.5 0 100 17c1.3 0 2-.8 2-1.7 0-1.5-1.2-1.6-1.2-2.8 0-1 .8-1.7 1.8-1.7h2.2a3.2 3.2 0 003.2-3.2C20 6.9 16.4 3.5 12 3.5z"/><circle cx="7.8" cy="11.2" r="1.1"/><circle cx="10.2" cy="7.4" r="1.1"/><circle cx="14.6" cy="7.4" r="1.1"/></symbol>
   <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></symbol>
   <symbol id="i-image" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="3"/><circle cx="9" cy="9" r="1.7"/><path d="M20.5 16l-5-5-8 8.5"/></symbol>
   <symbol id="i-video" viewBox="0 0 24 24"><rect x="3.5" y="5.5" width="17" height="13" rx="3"/><path d="M10.5 9.5v5l4-2.5z"/></symbol>
@@ -72,14 +76,14 @@
     </a>
     <form class="search" id="search-form" role="search" autocomplete="off">
       <svg class="i"><use href="#i-search"/></svg>
-      <input id="search" type="search" enterkeyhint="search" placeholder="Search names, dates or what is in photos" aria-label="Search" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <input id="search" type="search" enterkeyhint="search" placeholder="Search photos, names, dates" aria-label="Search" autocomplete="off" autocapitalize="off" spellcheck="false">
       <button type="button" class="clear" id="search-clear" aria-label="Clear search" hidden><svg class="i"><use href="#i-x"/></svg></button>
       <kbd id="kbd" aria-hidden="true">/</kbd>
     </form>
     <div class="actions">
       <button class="icon-btn" id="btn-select" type="button" aria-pressed="false" aria-label="Select files" title="Select files"><svg class="i"><use href="#i-select"/></svg></button>
       <button class="icon-btn" id="btn-filters" type="button" aria-haspopup="dialog" aria-label="Sort, filter and view" title="Sort, filter and view"><svg class="i"><use href="#i-sliders"/></svg><span class="dot" id="filters-dot" hidden></span></button>
-      <button class="icon-btn" id="btn-theme" type="button" aria-label="Switch light or dark theme" title="Switch theme"><svg class="i ic-moon"><use href="#i-moon"/></svg><svg class="i ic-sun"><use href="#i-sun"/></svg></button>
+      <button class="icon-btn" id="btn-theme" type="button" aria-label="Appearance and colour theme" title="Appearance and themes" aria-haspopup="dialog"><svg class="i"><use href="#i-palette"/></svg></button>
     </div>
   </div>
 </header>
@@ -127,6 +131,29 @@
   <button class="btn ghost" id="sel-link" type="button" aria-label="Copy links"><svg class="i"><use href="#i-link"/></svg><span class="lbl">Copy links</span></button>
   <button class="btn primary" id="sel-dl" type="button"><svg class="i"><use href="#i-download"/></svg><span class="lbl">Download</span></button>
   <button class="icon-btn" id="sel-done" type="button" aria-label="Done selecting"><svg class="i"><use href="#i-x"/></svg></button>
+</div>
+
+<div class="sheet" id="tsheet" hidden>
+  <div class="sheet-bg" data-close></div>
+  <div class="sheet-panel" role="dialog" aria-modal="true" aria-labelledby="tsheet-h">
+    <div class="sheet-head">
+      <h2 id="tsheet-h">Appearance</h2>
+      <button class="icon-btn" type="button" data-close aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button>
+    </div>
+    <div class="field">
+      <span class="lbl" id="mode-l">Light or dark</span>
+      <div class="seg wide" id="t-mode" role="group" aria-labelledby="mode-l">
+        <button type="button" data-mode="auto" aria-pressed="true">Auto</button>
+        <button type="button" data-mode="light" aria-pressed="false"><svg class="i"><use href="#i-sun"/></svg>Light</button>
+        <button type="button" data-mode="dark" aria-pressed="false"><svg class="i"><use href="#i-moon"/></svg>Dark</button>
+      </div>
+    </div>
+    <div class="field">
+      <span class="lbl" id="pal-l">Colour theme</span>
+      <div class="swatches" id="t-palettes" role="group" aria-labelledby="pal-l"></div>
+      <p class="hint" id="t-name"></p>
+    </div>
+  </div>
 </div>
 
 <div class="sheet" id="sheet" hidden>

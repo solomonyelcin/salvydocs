@@ -1187,7 +1187,29 @@
   async function edShare() { const f = edFile(); try { if (navigator.canShare?.({ files: [f] })) { await navigator.share({ files: [f], title: f.name }); return; } } catch (e) { if (e.name === "AbortError") return; } edDownload(); }
 
   /* ---------- UI wiring ---------- */
-  function applyTheme(t) { document.documentElement.dataset.theme = t; store.set("dg-theme", t); }
+  const PALETTES = [
+    { id: "cyanotype", name: "Cyanotype", note: "Prussian blue on pale paper", sw: ["#1b5b8f", "#2a8fb5", "#eef2f3"] },
+    { id: "lagoon", name: "Lagoon", note: "Deep teal and sea green", sw: ["#0f766e", "#2f9e6f", "#edf5f4"] },
+    { id: "orchard", name: "Orchard", note: "Leaf green with a hint of lime", sw: ["#3f7d20", "#8aa62a", "#f1f4ec"] },
+    { id: "dusk", name: "Dusk", note: "Violet fading to magenta", sw: ["#5b45c7", "#c04fb0", "#f2f0f8"] },
+    { id: "ember", name: "Ember", note: "Warm orange and amber", sw: ["#c2410c", "#d99a00", "#f7f1ec"] },
+    { id: "graphite", name: "Graphite", note: "Neutral greys with an amber spark", sw: ["#2b2b2b", "#d97706", "#f2f2f1"] },
+  ];
+  const root = document.documentElement, dark = matchMedia("(prefers-color-scheme: dark)");
+  function applyLook() {
+    const mode = root.dataset.mode || "auto"; root.dataset.theme = mode === "auto" ? (dark.matches ? "dark" : "light") : mode;
+    const m = $("#meta-theme"); if (m) m.content = getComputedStyle(root).getPropertyValue("--paper").trim() || m.content;
+  }
+  function setLookMode(m) { root.dataset.mode = m; store.set("dg-mode", m); applyLook(); paintLook(); }
+  function setPalette(id) { root.dataset.palette = id; store.set("dg-palette", id); applyLook(); paintLook(); }
+  function paintLook() {
+    $$("#t-mode button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.mode === (root.dataset.mode || "auto"))));
+    $$("#t-palettes .sw").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.p === root.dataset.palette)));
+    const pl = PALETTES.find((x) => x.id === root.dataset.palette); if (pl) $("#t-name").textContent = pl.name + ": " + pl.note;
+  }
+  dark.addEventListener?.("change", () => { if ((root.dataset.mode || "auto") === "auto") applyLook(); });
+  function openLook() { paintLook(); $("#tsheet").hidden = false; $("#btn-theme").setAttribute("aria-expanded", "true"); $("#t-mode button[aria-pressed=true]")?.focus(); }
+  function closeLook() { $("#tsheet").hidden = true; $("#btn-theme").setAttribute("aria-expanded", "false"); $("#btn-theme").focus(); }
 
   function openFilters() {
     const dates = $("#f-date");
@@ -1260,7 +1282,11 @@
     };
 
     // top bar
-    $("#btn-theme").onclick = () => applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
+    $("#t-palettes").append(...PALETTES.map((x) => { const b = el("button", "sw"); b.type = "button"; b.dataset.p = x.id; b.setAttribute("aria-label", x.name); b.style.cssText = `--a:${x.sw[0]};--b:${x.sw[1]};--p:${x.sw[2]}`; b.innerHTML = `<i></i>${esc(x.name)}`; b.onclick = () => setPalette(x.id); return b; }));
+    $$("#t-mode button").forEach((b) => (b.onclick = () => setLookMode(b.dataset.mode)));
+    $$("#tsheet [data-close]").forEach((b) => (b.onclick = closeLook));
+    $("#btn-theme").onclick = () => ($("#tsheet").hidden ? openLook() : closeLook());
+    applyLook(); paintLook();
     $("#btn-select").onclick = () => { if (S.select) endSelect(); else { S.select = true; updateSel(); } };
     $("#btn-filters").onclick = () => ($("#sheet").hidden ? openFilters() : closeFilters());
     $$("#sheet [data-close]").forEach((b) => (b.onclick = closeFilters));
@@ -1334,7 +1360,8 @@
         wake(); return;
       }
       if (e.key === "Escape") {
-        if (!$("#sheet").hidden) closeFilters();
+        if (!$("#tsheet").hidden) closeLook();
+        else if (!$("#sheet").hidden) closeFilters();
         else if (typing && document.activeElement.id === "search") { if ($("#search").value) $("#search-clear").click(); else $("#search").blur(); }
         else if (S.select) endSelect();
       } else if (!typing && (e.key === "/" || ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k"))) { e.preventDefault(); $("#search").focus(); $("#search").select(); }
