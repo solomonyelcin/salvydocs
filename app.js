@@ -423,7 +423,7 @@
     const c = $("#content");
     const keep = S.shown;
     c.textContent = ""; S.secs = {}; S.groups = new Map(); S.shown = 0;
-    c.className = "content layout-" + S.layout + (S.multi || S.q ? "" : " no-heads");
+    c.className = "content layout-" + S.layout + (S.multi || S.q ? "" : " no-heads") + (S.enter ? " enter" : "");
     applySizes();
     paintStatus();
     if (S.gnote && S.sec.media) { const n = el("p", "gnote"); n.textContent = S.gnote; c.append(n); }
@@ -555,6 +555,11 @@
   }
 
   /* ---------- hero, tabs, tags, status ---------- */
+  function placeTabInd() {
+    const ind = $("#tab-ind"), a = $('#tabs .tab[aria-pressed="true"]:not([hidden])'); if (!ind) return;
+    if (!a || !a.offsetWidth) { ind.style.width = "0"; return; }
+    ind.style.width = a.offsetWidth - 24 + "px"; ind.style.transform = `translateX(${a.offsetLeft + 12}px)`;
+  }
   function paintChrome() {
     const cur = S.path.at(-1), searching = !!S.q, filtering = S.date !== "any";
     $("#title").textContent = cur.name;
@@ -573,7 +578,7 @@
     // stats
     const all = S.items; const c = { folder: 0, image: 0, video: 0, doc: 0 };
     for (const f of all) c[f._k]++;
-    let text;
+    let text, pills = [];
     if (searching) text = S.aiState === "loading" ? (S.aiMsg || "Preparing smart search…") : `${plural(S.view.length, "result")} for “${S.q}” ${S.scope === "all" ? "in every album" : "in this album"}${S.aiHits ? `, ${plural(S.aiHits, "photo")} matched by what is in them` : ""}`;
     else {
       const parts = [];
@@ -581,13 +586,15 @@
       if (c.video) parts.push(plural(c.video, "video")); if (c.doc) parts.push(plural(c.doc, "document"));
       text = parts.join(", ") + (S.done ? "" : (parts.length ? ", " : "") + "loading more");
       if (S.done && !parts.length) text = "";
+      pills = parts.concat(S.done ? [] : ["loading more…"]);
     }
-    $("#stats").textContent = text;
+    const st = $("#stats"); st.textContent = "";
+    if (pills.length) for (const t of pills) { const s = el("span", "pill"); s.textContent = t; st.append(s); } else st.textContent = text;
     if (searching && S.ai && S.ai.q === S.q && S.aiState !== "loading") {
       const b = el("button", "linkbtn"); b.type = "button";
       b.textContent = S.aiMore ? "Show fewer, closer matches" : "Show more matches";
       b.onclick = () => smartSearch(S.q, !S.aiMore);
-      $("#stats").append(" ", b);
+      st.append(" ", b);
     }
     // tabs
     for (const b of $$("#tabs .tab")) {
@@ -596,6 +603,7 @@
       $(".n", b).textContent = n ? n.toLocaleString() : "";
       b.hidden = t !== "all" && n === 0 && S.type !== t;
     }
+    placeTabInd();
     // active filters
     const tags = $("#tags"); tags.textContent = "";
     const addTag = (label, fn) => { const b = el("button", "tag"); b.type = "button"; b.innerHTML = `${esc(label)}${ic("x")}`; b.setAttribute("aria-label", "Remove filter: " + label); b.onclick = fn; tags.append(b); };
@@ -690,6 +698,7 @@
     catch { if (id !== ROOT.id) { toast("That link isn't available. Showing the main album."); history.replaceState(null, "", location.pathname + location.search); } id = ROOT.id; path = [ROOT]; S.sig = ""; }
     if (gen !== S.gen) return;
     S.path = path; S.sig = curSig();
+    { const c = $("#content"); c.classList.remove("enter"); void c.offsetWidth; S.enter = true; setTimeout(() => { S.enter = false; c.classList.remove("enter"); }, 650); }
     render();
     await new Promise((resolve) => {
       let first = true;
@@ -774,7 +783,7 @@
 
   function closeViewer(fromPop) {
     if (V.el.hidden) return;
-    closeEditor(); stopPlay(); V.el.hidden = true; document.body.classList.remove("lock");
+    closeEditor(); V.idx0 = null; stopPlay(); V.el.hidden = true; document.body.classList.remove("lock");
     inertEls().forEach((e) => (e.inert = false));
     teardown(); $("#v-panel").hidden = true; V.info = false; $("#v-info").setAttribute("aria-pressed", "false");
     if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
@@ -792,6 +801,7 @@
   function go(i) {
     i = clamp(i, 0, V.list.length - 1); V.idx = i;
     const f = V.list[i];
+    const dir = V.idx0 == null ? 0 : Math.sign(i - V.idx0); V.idx0 = i; V.dir = dir;
     teardown(); V.Z = { s: 1, x: 0, y: 0 }; V.big = false;
     setMode(f._k === "image" ? "img" : f._k === "video" ? "vid" : "frame");
     if (V.mode === "img") mountImage(f, i); else if (V.mode === "vid") mountVideo(f); else mountFrame(f);
@@ -806,7 +816,7 @@
 
   /* ----- photos: fit to screen, zoom, pan ----- */
   function mountImage(f, i) {
-    const img = new Image(); img.className = "v-img"; img.alt = f.name; img.draggable = false; img.referrerPolicy = "no-referrer";
+    const img = new Image(); img.className = "v-img" + (V.dir ? " slide" : ""); if (V.dir) img.style.setProperty("--dx", V.dir * 48 + "px"); img.alt = f.name; img.draggable = false; img.referrerPolicy = "no-referrer";
     const m = f.imageMediaMetadata; let nw = m?.width || 0, nh = m?.height || 0;
     if (m && (m.rotation === 1 || m.rotation === 3)) [nw, nh] = [nh, nw];
     V.nat = { w: nw, h: nh }; V.img = img;
@@ -1194,6 +1204,9 @@
     { id: "dusk", name: "Dusk", note: "Violet fading to magenta", sw: ["#5b45c7", "#c04fb0", "#f2f0f8"] },
     { id: "ember", name: "Ember", note: "Warm orange and amber", sw: ["#c2410c", "#d99a00", "#f7f1ec"] },
     { id: "graphite", name: "Graphite", note: "Neutral greys with an amber spark", sw: ["#2b2b2b", "#d97706", "#f2f2f1"] },
+    { id: "aurora", name: "Aurora", note: "Glossy glass with drifting teal and violet light", glass: true, sw: ["#0d9488", "#7c5cf0", "#e6f3f0"] },
+    { id: "sunrise", name: "Sunrise", note: "Glossy glass in rose, peach and gold", glass: true, sw: ["#e11d48", "#f59e0b", "#fff1ea"] },
+    { id: "opal", name: "Opal", note: "Glossy glass in pearl blue, mint and lilac", glass: true, sw: ["#4f6bed", "#14b8a6", "#edf0fb"] },
   ];
   const root = document.documentElement, dark = matchMedia("(prefers-color-scheme: dark)");
   function applyLook() {
@@ -1201,7 +1214,7 @@
     const m = $("#meta-theme"); if (m) m.content = getComputedStyle(root).getPropertyValue("--paper").trim() || m.content;
   }
   function setLookMode(m) { root.dataset.mode = m; store.set("dg-mode", m); applyLook(); paintLook(); }
-  function setPalette(id) { root.dataset.palette = id; store.set("dg-palette", id); applyLook(); paintLook(); }
+  function setPalette(id) { root.dataset.palette = id; if (PALETTES.find((x) => x.id === id)?.glass) root.dataset.glass = "1"; else delete root.dataset.glass; store.set("dg-palette", id); applyLook(); paintLook(); }
   function paintLook() {
     $$("#t-mode button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.mode === (root.dataset.mode || "auto"))));
     $$("#t-palettes .sw").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.p === root.dataset.palette)));
@@ -1282,7 +1295,8 @@
     };
 
     // top bar
-    $("#t-palettes").append(...PALETTES.map((x) => { const b = el("button", "sw"); b.type = "button"; b.dataset.p = x.id; b.setAttribute("aria-label", x.name); b.style.cssText = `--a:${x.sw[0]};--b:${x.sw[1]};--p:${x.sw[2]}`; b.innerHTML = `<i></i>${esc(x.name)}`; b.onclick = () => setPalette(x.id); return b; }));
+    let swk = 0;
+    $("#t-palettes").append(...PALETTES.flatMap((x, i) => { const out = []; if (i === 0 || (x.glass && !PALETTES[i - 1].glass)) { const g = el("div", "group-label"); g.textContent = x.glass ? "Glossy glass" : "Classic"; out.push(g); } const b = el("button", "sw"); b.style.setProperty("--k", swk++); b.type = "button"; b.dataset.p = x.id; b.setAttribute("aria-label", x.name); b.style.cssText = `--a:${x.sw[0]};--b:${x.sw[1]};--p:${x.sw[2]}`; b.innerHTML = `<i></i>${esc(x.name)}`; b.onclick = () => setPalette(x.id); out.push(b); return out; }));
     $$("#t-mode button").forEach((b) => (b.onclick = () => setLookMode(b.dataset.mode)));
     $$("#tsheet [data-close]").forEach((b) => (b.onclick = closeLook));
     $("#btn-theme").onclick = () => ($("#tsheet").hidden ? openLook() : closeLook());
@@ -1368,11 +1382,12 @@
     });
 
     // chrome behaviour
-    const bar = $("#bar"); const onScroll = () => bar.classList.toggle("stuck", scrollY > 6); addEventListener("scroll", onScroll, { passive: true }); onScroll();
+    const tt = $("#totop"); tt.onclick = () => window.scrollTo({ top: 0, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    const bar = $("#bar"); const onScroll = () => { bar.classList.toggle("stuck", scrollY > 6); tt.classList.toggle("on", scrollY > 900); }; addEventListener("scroll", onScroll, { passive: true }); onScroll();
     let lastW = 0;
     if ("ResizeObserver" in window) new ResizeObserver(() => {
       const w = content.clientWidth; if (!w || w === lastW) return; lastW = w;
-      applySizes(); if (S.layout === "mosaic") for (const g of S.groups.values()) layoutGroup(g);
+      applySizes(); placeTabInd(); if (S.layout === "mosaic") for (const g of S.groups.values()) layoutGroup(g);
     }).observe(content);
     addEventListener("popstate", () => applyHash());
     document.addEventListener("fullscreenchange", () => {
@@ -1385,6 +1400,7 @@
 
   /* ---------- boot ---------- */
   function boot() {
+    root.classList.add("boot"); setTimeout(() => root.classList.remove("boot"), 1400);
     $("#site-title").textContent = ROOT.name; document.title = ROOT.name; $("#title").textContent = ROOT.name;
     wire(); updateSel();
     if (!CFG.API_KEY || CFG.API_KEY.startsWith("YOUR_")) { S.started = true; S.done = true; S.error = "Add the Google API key to config.js to show the files."; render(); return; }

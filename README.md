@@ -16,7 +16,7 @@ Live site: https://solomonyelcin.github.io/salvydocs/
 - **Edit with AI**: in the photo viewer, tap the magic wand, describe a change ("remove the background", "make the sky a sunset"), and download the result. The original in Drive is never changed. This needs the small edit service in `worker/` (set-up steps in `worker/README.md`); until then the button is hidden.
 - **Download** one file, or turn on **Select** (or long-press a photo on a phone), pick several and download them together. Google Docs, Sheets and Slides download as PDF, XLSX and PPTX.
 - **Share** an album or a single photo. Every view has its own link, and the Back button works as expected. On phones, Share opens the system share sheet.
-- Works on phones, tablets and desktops, with keyboard support. The palette button (top right) opens **Appearance**: Auto, Light or Dark, and six colour themes (Cyanotype, Lagoon, Orchard, Dusk, Ember, Graphite). The choice is remembered on each device.
+- Works on phones, tablets and desktops, with keyboard support. The palette button (top right) opens **Appearance**: Auto, Light or Dark, and nine colour themes: six classic (Cyanotype, Lagoon, Orchard, Dusk, Ember, Graphite) and three glossy glass ones (Aurora, Sunrise, Opal) with frosted panels and softly drifting light. The choice is remembered on each device.
 
 Keyboard in the viewer: arrows move (or pan when zoomed in), `I` details, `P` slideshow, `D` download, `F` full screen, `+` `-` `0` zoom, `Esc` closes.
 Video: `Space` play/pause, `←` `→` seek 5 s, `J` `L` seek 10 s, `↑` `↓` volume, `M` mute, `<` `>` speed, `R` loop, `PageUp`/`PageDown` previous/next file.

@@ -17,7 +17,8 @@
   try {
     var d = document.documentElement, m = localStorage.getItem("dg-mode") || localStorage.getItem("dg-theme") || "auto";
     d.dataset.mode = m; d.dataset.theme = m === "auto" ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : m;
-    d.dataset.palette = localStorage.getItem("dg-palette") || "cyanotype";
+    var pl = localStorage.getItem("dg-palette") || "cyanotype"; d.dataset.palette = pl;
+    if (/^(aurora|sunrise|opal)$/.test(pl)) d.dataset.glass = "1";
   } catch (e) {}
 </script>
 <link rel="stylesheet" href="style.css">
@@ -109,6 +110,7 @@
     <button class="tab" type="button" data-type="videos" aria-pressed="false">Videos <span class="n"></span></button>
     <button class="tab" type="button" data-type="docs" aria-pressed="false">Documents <span class="n"></span></button>
     <button class="tab" type="button" data-type="albums" aria-pressed="false">Albums <span class="n"></span></button>
+    <span class="tab-ind" id="tab-ind" aria-hidden="true"></span>
   </div>
 
   <div class="active-row" id="active-row" hidden>
@@ -259,6 +261,8 @@
     </div>
   </section>
 </div>
+
+<button class="totop" id="totop" type="button" aria-label="Back to top"><svg class="i"><use href="#i-chevron"/></svg></button>
 
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
