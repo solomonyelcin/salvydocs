@@ -193,6 +193,16 @@
     if (S.indexing) return S.indexing;
     S.indexing = (async () => {
       const all = []; const names = new Map([[ROOT.id, ROOT.name]]); const queue = [ROOT.id];
+      // Prefer the list the nightly build saved: instant, and no calls to Google. Fall back to listing the albums live.
+      try {
+        const r = await fetch("library.json", { cache: "no-cache" });
+        const j = r.ok ? await r.json() : null;
+        if (j?.files?.length) {
+          for (const f of j.files) { prep(f); all.push(f); if (f._k === "folder") { names.set(f.id, f.name); known.set(f.id, { id: f.id, name: f.name, parent: f.parents?.[0] || null }); } }
+          S.libraryDate = j.generated;
+          S.index = { items: all, names, saved: true }; return S.index;
+        }
+      } catch { /* use the live listing */ }
       const take = (data) => {
         for (const f of data.files || []) { prep(f); all.push(f); if (f._k === "folder") { queue.push(f.id); names.set(f.id, f.name); known.set(f.id, { id: f.id, name: f.name, parent: f.parents?.[0] || null }); } }
         S.indexCount = all.length; paintStatus();
@@ -362,8 +372,22 @@
     return out;
   }
 
+  async function findSimilar(id, name) {
+    if (!window.SmartSearch) return;
+    try {
+      const scores = await SmartSearch.similar(id);
+      if (!scores) { toast("This photo isn't in the search index yet. The index updates every night."); return; }
+      const idx = await ensureIndex();
+      const f = idx?.items.find((x) => x.id === id);
+      S.similar = { id, name: name || f?.name || "this photo", scores };
+      S.q = ""; S.type = "all"; S.date = "any"; $("#search").value = ""; aiSeq++; S.ai = null;
+      syncUrl(); window.scrollTo({ top: 0 }); render();
+      if (!scores.size) toast("No close matches found.");
+    } catch { toast("Couldn't find similar photos. Try again."); }
+  }
+
   /* ---------- filtering ---------- */
-  function baseList() { return S.q && S.scope === "all" ? (S.index ? S.index.items : []) : S.items; }
+  function baseList() { return S.similar || (S.q && S.scope === "all") ? (S.index ? S.index.items : []) : S.items; }
   function dateRange() {
     const d = S.date, now = Date.now();
     if (d === "7") return [now - 7 * 864e5, Infinity];
@@ -380,11 +404,12 @@
     const terms = S.q.toLowerCase().split(/\s+/).filter(Boolean);
     const range = dateRange();
     const counts = { all: 0, photos: 0, videos: 0, docs: 0, albums: 0 };
-    const out = []; const base = baseList();
+    const out = []; const base = baseList(); const sim = S.similar && S.similar.scores.size ? S.similar.scores : null;
     const ai = terms.length && S.ai && S.ai.q === S.q && S.ai.scores.size ? S.ai.scores : null;
     S.map = new Map(); S.aiHits = 0;
     for (const f of base) {
       S.map.set(f.id, f);
+      if (S.similar) { if (!sim || !sim.has(f.id)) continue; f._rank = sim.get(f.id); }
       if (terms.length) {
         const hay = searchText(f), byName = terms.every((t) => hay.includes(t));
         if (!byName && !(ai && f._k === "image" && ai.has(f.id))) continue;
@@ -401,8 +426,8 @@
       az: (a, b) => coll.compare(a.name, b.name),
       za: (a, b) => coll.compare(b.name, a.name),
     }[S.sort];
-    out.sort(ai ? (a, b) => (b._rank || 0) - (a._rank || 0) || cmp(a, b) : cmp);
-    S.ranked = !!ai;
+    out.sort(ai || S.similar ? (a, b) => (b._rank || 0) - (a._rank || 0) || cmp(a, b) : cmp);
+    S.ranked = !!ai || !!S.similar;
     const fo = [], me0 = [], dc = [];
     for (const f of out) (f._k === "folder" ? fo : f._k === "doc" ? dc : me0).push(f);
     const me = groupMedia(me0);
@@ -564,7 +589,7 @@
     const cur = S.path.at(-1), searching = !!S.q, filtering = S.date !== "any";
     $("#title").textContent = cur.name;
     document.title = cur.id === ROOT.id ? ROOT.name : `${cur.name} – ${ROOT.name}`;
-    $("#hero").classList.toggle("compact", searching || filtering);
+    $("#hero").classList.toggle("compact", searching || filtering || !!S.similar);
     $("#lede").textContent = cur.id === ROOT.id ? (CFG.TAGLINE || "Photos, videos and documents.") : "";
     // breadcrumbs
     const cr = $("#crumbs");
@@ -579,7 +604,8 @@
     const all = S.items; const c = { folder: 0, image: 0, video: 0, doc: 0 };
     for (const f of all) c[f._k]++;
     let text, pills = [];
-    if (searching) text = S.aiState === "loading" ? (S.aiMsg || "Preparing smart search…") : `${plural(S.view.length, "result")} for “${S.q}” ${S.scope === "all" ? "in every album" : "in this album"}${S.aiHits ? `, ${plural(S.aiHits, "photo")} matched by what is in them` : ""}`;
+    if (S.similar) text = S.index || S.similar.scores.size === 0 ? `${plural(S.view.length, "photo")} that ${S.view.length === 1 ? "looks" : "look"} like “${S.similar.name}”` : "Finding similar photos…";
+    else if (searching) text = S.aiState === "loading" ? (S.aiMsg || "Preparing smart search…") : `${plural(S.view.length, "result")} for “${S.q}” ${S.scope === "all" ? "in every album" : "in this album"}${S.aiHits ? `, ${plural(S.aiHits, "photo")} matched by what is in them` : ""}`;
     else {
       const parts = [];
       if (c.folder) parts.push(plural(c.folder, "album")); if (c.image) parts.push(plural(c.image, "photo"));
@@ -607,6 +633,7 @@
     // active filters
     const tags = $("#tags"); tags.textContent = "";
     const addTag = (label, fn) => { const b = el("button", "tag"); b.type = "button"; b.innerHTML = `${esc(label)}${ic("x")}`; b.setAttribute("aria-label", "Remove filter: " + label); b.onclick = fn; tags.append(b); };
+    if (S.similar) addTag("Similar to " + S.similar.name, () => { S.similar = null; changed(); });
     if (filtering) addTag(dateLabel(S.date), () => { S.date = "any"; changed(); });
     if (S.type !== "all" && (searching || filtering)) addTag(tabLabel(S.type), () => { S.type = "all"; changed(); });
     if (tags.children.length) { const b = el("button", "tag clear-all"); b.type = "button"; b.textContent = "Clear all"; b.onclick = clearFilters; tags.append(b); }
@@ -623,7 +650,7 @@
 
   function paintReel() {
     const r = $("#reel");
-    const imgs = (!S.q && S.date === "any" && S.type === "all") ? S.items.filter((f) => f._k === "image").sort((a, b) => b._t - a._t).slice(0, 8) : [];
+    const imgs = (!S.q && !S.similar && S.date === "any" && S.type === "all") ? S.items.filter((f) => f._k === "image").sort((a, b) => b._t - a._t).slice(0, 8) : [];
     const key = imgs.map((f) => f.id).join(",");
     if (!imgs.length) { r.hidden = true; S.reelKey = ""; return; }
     r.hidden = false;
@@ -656,9 +683,9 @@
   const normHash = () => {
     const p = new URLSearchParams(location.hash.replace(/^#/, ""));
     const t = p.get("t"), s = p.get("s");
-    return { d: p.get("d") || ROOT.id, t: TYPES.includes(t) ? t : "all", q: (p.get("q") || "").slice(0, 120), s: SORTS.includes(s) ? s : DEFAULT_SORT, g: GROUPS.includes(p.get("g")) ? p.get("g") : DEFAULT_GROUP, r: p.get("r") || "any", scope: p.get("in") === "all" ? "all" : "folder", f: p.get("f") };
+    return { d: p.get("d") || ROOT.id, t: TYPES.includes(t) ? t : "all", q: (p.get("q") || "").slice(0, 120), s: SORTS.includes(s) ? s : DEFAULT_SORT, g: GROUPS.includes(p.get("g")) ? p.get("g") : DEFAULT_GROUP, r: p.get("r") || "any", sim: (p.get("sim") || "").slice(0, 80), scope: p.get("in") === "all" ? "all" : "folder", f: p.get("f") };
   };
-  const curSig = () => [S.path.at(-1).id, S.type, S.q, S.sort, S.group, S.date, S.q && S.scope === "all" ? "all" : "folder"].join("|");
+  const curSig = () => [S.path.at(-1).id, S.type, S.q, S.sort, S.group, S.date, S.q && S.scope === "all" ? "all" : "folder", S.similar?.id || ""].join("|");
   function hashFor(o = {}) {
     const p = new URLSearchParams(); const d = o.d ?? S.path.at(-1).id;
     if (d !== ROOT.id) p.set("d", d);
@@ -668,17 +695,18 @@
     if (S.group !== DEFAULT_GROUP) p.set("g", S.group);
     if (S.date !== "any") p.set("r", S.date);
     if (S.q && S.scope === "all") p.set("in", "all");
+    if (S.similar) p.set("sim", S.similar.id);
     if (o.f) p.set("f", o.f);
     const s = p.toString();
     return s ? "#" + s : location.pathname + location.search;
   }
   function syncUrl() { S.sig = curSig(); history.replaceState(null, "", hashFor(V.el.hidden ? {} : { f: V.list[V.idx]?.id })); }
   function changed() { syncUrl(); render(); }
-  function clearFilters() { S.q = ""; S.date = "any"; S.type = "all"; $("#search").value = ""; changed(); }
+  function clearFilters() { S.similar = null; S.q = ""; S.date = "any"; S.type = "all"; $("#search").value = ""; changed(); }
 
   async function applyHash() {
     const h = normHash();
-    const sig = [h.d, h.t, h.q, h.s, h.g, h.r, h.q && h.scope === "all" ? "all" : "folder"].join("|");
+    const sig = [h.d, h.t, h.q, h.s, h.g, h.r, h.q && h.scope === "all" ? "all" : "folder", h.sim].join("|");
     if (sig !== S.sig || !S.started) {
       const newFolder = h.d !== S.path.at(-1).id || !S.started;
       S.sig = sig; S.type = h.t; S.q = h.q; S.sort = h.s; S.group = h.g; S.date = /^(any|7|30|365|y\d{4})$/.test(h.r) ? h.r : "any"; S.scope = h.scope;
@@ -686,6 +714,7 @@
       if (newFolder) await loadFolder(h.d); else render();
       S.started = true; smartSearch(S.q);
       if (S.q && S.scope === "all") ensureIndex();
+      if (h.sim && S.similar?.id !== h.sim) findSimilar(h.sim); else if (!h.sim && S.similar) { S.similar = null; render(); }
     }
     if (h.f) await openFromHash(h.f); else closeViewer(true);
   }
@@ -711,7 +740,7 @@
   }
 
   function navigateTo(id) {
-    S.q = ""; S.type = "all"; S.date = "any"; $("#search").value = "";
+    S.q = ""; S.type = "all"; S.date = "any"; S.similar = null; $("#search").value = "";
     history.pushState(null, "", hashFor({ d: id }));
     window.scrollTo({ top: 0 });
     return applyHash();
@@ -809,6 +838,7 @@
     $("#v-sub").textContent = `${i + 1} of ${V.list.length}, ${fmtDate(f._t)}`;
     $("#v-prev").hidden = i === 0; $("#v-next").hidden = i === V.list.length - 1;
     $("#v-edit").hidden = !(EDIT.api && f._k === "image");
+    $("#v-similar").hidden = true; if (f._k === "image" && window.SmartSearch) SmartSearch.has(f.id).then((ok) => { if (ok && V.list[V.idx] === f) $("#v-similar").hidden = false; });
     paintStrip(); if (V.info) paintInfo(f);
     if (location.hash !== hashFor({ f: f.id }) && !V.el.hidden) history.replaceState(null, "", hashFor({ f: f.id }));
     wake();
@@ -1278,7 +1308,7 @@
     let st;
     $("#search").addEventListener("input", () => {
       $("#search-clear").hidden = !$("#search").value; clearTimeout(st);
-      st = setTimeout(() => { S.q = $("#search").value.trim(); syncUrl(); if (S.q && S.scope === "all") ensureIndex(); render(); smartSearch(S.q); }, 160);
+      st = setTimeout(() => { S.q = $("#search").value.trim(); if (S.q) S.similar = null; syncUrl(); if (S.q && S.scope === "all") ensureIndex(); render(); smartSearch(S.q); }, 160);
     });
     $("#search-form").addEventListener("submit", (e) => { e.preventDefault(); $("#search").blur(); });
     $("#search-clear").onclick = () => { $("#search").value = ""; S.q = ""; aiSeq++; S.ai = null; S.aiState = ""; changed(); $("#search").focus(); };
@@ -1327,6 +1357,12 @@
     $("#v-share").onclick = () => { const f = V.list[V.idx]; shareLink(fileUrl(f), f.name); };
     $("#v-download").onclick = () => downloadFiles([V.list[V.idx]]);
     if (document.fullscreenEnabled) $("#v-full").onclick = toggleFS; else $("#v-full").hidden = true;
+    $("#v-similar").onclick = async () => {
+      const f = V.list[V.idx], back = V.pushed;
+      const popped = back ? new Promise((r) => { addEventListener("popstate", r, { once: true }); setTimeout(r, 600); }) : null;
+      closeViewer(); if (popped) { await popped; await sleep(60); } // let the Back step settle so it doesn't undo this
+      findSimilar(f.id, f.name);
+    };
     $("#v-edit").onclick = openEditor; $("#ed-close").onclick = closeEditor;
     $("#ed-chips").append(...EDIT_IDEAS.map((t) => { const b = el("button", "chip"); b.type = "button"; b.textContent = t; b.onclick = () => { $("#ed-prompt").value = t; $("#ed-prompt").focus(); }; return b; }));
     $("#ed-form").addEventListener("submit", (e) => { e.preventDefault(); if (!$("#ed-pass").hidden) store.set("dg-edit-pass", $("#ed-pass").value); runEdit(); });
@@ -1399,6 +1435,7 @@
   }
 
   /* ---------- boot ---------- */
+  if ("serviceWorker" in navigator && location.protocol === "https:") addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
   function boot() {
     root.classList.add("boot"); setTimeout(() => root.classList.remove("boot"), 1400);
     $("#site-title").textContent = ROOT.name; document.title = ROOT.name; $("#title").textContent = ROOT.name;

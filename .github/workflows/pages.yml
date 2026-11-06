@@ -37,8 +37,9 @@ jobs:
       - name: Collect site files
         run: |
           mkdir _site
-          cp index.html style.css app.js ai.js config.js groups.json _site/
-          cp search-index.json _site/ 2>/dev/null || true
+          cp index.html style.css app.js ai.js config.js groups.json sw.js manifest.webmanifest _site/
+          cp -r icons _site/
+          cp search-index.json library.json _site/ 2>/dev/null || true
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site

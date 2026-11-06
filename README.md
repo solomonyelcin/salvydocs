@@ -14,6 +14,8 @@ Live site: https://solomonyelcin.github.io/salvydocs/
 - **Filter and sort** by type (Photos, Videos, Documents, Albums), by date (last 7 or 30 days, last 12 months, or a year), and by newest, oldest or name. Choose Mosaic, Grid or List layout and the thumbnail size.
 - **View** photos fitted to any screen, with zoom in/out/fit buttons (also wheel, double-click, double-tap or pinch), drag to pan, swipe or arrow keys to move on, a filmstrip, a details panel and a slideshow. **Videos** play in a built-in player (seek bar, speed, volume, loop, picture-in-picture, full screen, double-tap to skip 10 s). Videos the browser can't play, and documents, open in Google's own preview.
 - **Edit with AI**: in the photo viewer, tap the magic wand, describe a change ("remove the background", "make the sky a sunset"), and download the result. The original in Drive is never changed. This needs the small edit service in `worker/` (set-up steps in `worker/README.md`); until then the button is hidden.
+- **Find similar**: in the photo viewer, tap the similar-photos button to see the photos in the whole library that look like it.
+- **Install it** on a phone or computer (browser menu, Add to Home screen or Install app). The app opens even with no connection, though photos still need one.
 - **Download** one file, or turn on **Select** (or long-press a photo on a phone), pick several and download them together. Google Docs, Sheets and Slides download as PDF, XLSX and PPTX.
 - **Share** an album or a single photo. Every view has its own link, and the Back button works as expected. On phones, Share opens the system share sheet.
 - Works on phones, tablets and desktops, with keyboard support. The palette button (top right) opens **Appearance**: Auto, Light or Dark, and nine colour themes: six classic (Cyanotype, Lagoon, Orchard, Dusk, Ember, Graphite) and three glossy glass ones (Aurora, Sunrise, Opal) with frosted panels and softly drifting light. The choice is remembered on each device.
@@ -60,6 +62,7 @@ In the repo, **Settings → Pages → Source** must be **GitHub Actions**.
 `scripts/build-index.mjs` runs in the deploy workflow. It reads every photo in the shared folder, turns each into a small vector with the CLIP model (`Xenova/clip-vit-base-patch32`) and publishes `search-index.json` next to the site. Photos that have not changed are reused, so later runs are quick. A nightly run (and any push) picks up new photos.
 In the browser, `ai.js` turns the words typed into a vector with the same model and ranks the photos by similarity. If no index exists yet, search falls back to names and dates.
 The script sends the site address as the referrer, so the existing restricted API key works and no extra secret is needed.
+The same nightly run saves `library.json`, the list of every album and file. Searching *Everywhere* reads it instead of asking Google, so it is instant and can't hit Google's request limits. New files appear in it after the next run.
 Run the **Deploy to GitHub Pages** workflow by hand from the Actions tab to index new photos straight away.
 
 ## Your own groups (people, occasions)

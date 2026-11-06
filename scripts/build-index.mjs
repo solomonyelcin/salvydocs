@@ -26,20 +26,21 @@ const api = async (path, params) => {
 };
 
 async function listPhotos() {
-  const photos = [], seen = new Set(), queue = [ROOT];
+  const photos = [], library = [], seen = new Set(), queue = [ROOT];
   while (queue.length) {
     const id = queue.shift(); if (seen.has(id)) continue; seen.add(id);
     let token;
     do {
-      const r = await api("/files", { q: `'${id}' in parents and trashed=false`, pageSize: "1000", fields: "nextPageToken,files(id,name,mimeType,md5Checksum,modifiedTime,thumbnailLink)", ...(token ? { pageToken: token } : {}) });
+      const r = await api("/files", { q: `'${id}' in parents and trashed=false`, pageSize: "1000", fields: "nextPageToken,files(id,name,mimeType,md5Checksum,modifiedTime,size,webViewLink,parents,thumbnailLink,imageMediaMetadata(width,height,time,rotation,location(latitude,longitude)),videoMediaMetadata(width,height,durationMillis))", ...(token ? { pageToken: token } : {}) });
       for (const f of r.files || []) {
+        const { thumbnailLink, md5Checksum, ...slim } = f; library.push(slim);
         if (f.mimeType === "application/vnd.google-apps.folder") queue.push(f.id);
         else if (f.mimeType.startsWith("image/") && !/svg|gif/.test(f.mimeType)) photos.push(f);
       }
       token = r.nextPageToken;
     } while (token);
   }
-  return photos;
+  return { photos, library };
 }
 
 async function download(f) {
@@ -62,7 +63,10 @@ async function previous() {
   try { return JSON.parse(fs.readFileSync(OUT, "utf8")).items || {}; } catch { return {}; }
 }
 
-const photos = await listPhotos();
+const { photos, library } = await listPhotos();
+// The whole folder tree as a plain list, so the site can search every album without calling Google (no thumbnail links: those expire).
+fs.writeFileSync(process.env.LIBRARY_OUT || "library.json", JSON.stringify({ v: 1, generated: new Date().toISOString(), files: library }));
+console.log(`Wrote library.json with ${library.length} entries.`);
 console.log(`Found ${photos.length} photos.`);
 const old = await previous();
 const items = {}; const todo = [];

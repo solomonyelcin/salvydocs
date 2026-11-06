@@ -52,6 +52,17 @@
     // true when a search index has been built for this site
     // Map(fileId -> theme name) from the pre-built index, or null when there is no index
     themes: async () => ((await loadIndex()) ? themeMap : null),
+    // photos that look like the given photo: Map(fileId -> score), best first, or null when it isn't in the index
+    async similar(id) {
+      const index = await loadIndex(), me = index?.get(id)?.[0]; if (!me) return null;
+      const all = []; let sum = 0, sq = 0;
+      for (const [other, parts] of index) { if (other === id) continue; let d = 0; const a = parts[0]; for (let i = 0; i < a.length; i++) d += a[i] * me[i]; d /= 127 * 127; all.push([other, d]); sum += d; sq += d * d; }
+      const n = all.length || 1, mean = sum / n, sd = Math.sqrt(Math.max(1e-9, sq / n - mean * mean));
+      all.sort((x, y) => y[1] - x[1]);
+      const out = new Map(); for (const [k, s] of all) { if (out.size >= 60 || (out.size >= 6 && s < mean + 1.5 * sd) || s < 0.5) break; out.set(k, s); }
+      return out;
+    },
+    has: async (id) => !!(await loadIndex())?.has(id),
     available: async () => !!(await loadIndex()),
     // returns Map(fileId -> score) of photos that look like the words, or null when smart search can't run
     async search(q, onStatus, more = false) {

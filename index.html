@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Salvius Memories</title>
 <meta name="description" content="Photos, videos and documents from Salvius Memories.">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <meta name="theme-color" content="#eef2f3" id="meta-theme">
 <meta property="og:title" content="Salvius Memories">
 <meta property="og:description" content="Photos, videos and documents from Salvius Memories.">
@@ -57,6 +59,7 @@
   <symbol id="i-wand" viewBox="0 0 24 24"><path d="M5 19L16 8"/><path d="M14.5 6.5l3 3"/><path d="M18 3v3M16.5 4.5h3M5 5v2M4 6h2M19 14v2M18 15h2"/></symbol>
   <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-3"/></symbol>
   <symbol id="i-palette" viewBox="0 0 24 24"><path d="M12 3.5a8.5 8.5 0 100 17c1.3 0 2-.8 2-1.7 0-1.5-1.2-1.6-1.2-2.8 0-1 .8-1.7 1.8-1.7h2.2a3.2 3.2 0 003.2-3.2C20 6.9 16.4 3.5 12 3.5z"/><circle cx="7.8" cy="11.2" r="1.1"/><circle cx="10.2" cy="7.4" r="1.1"/><circle cx="14.6" cy="7.4" r="1.1"/></symbol>
+  <symbol id="i-similar" viewBox="0 0 24 24"><rect x="3.5" y="7.5" width="13" height="13" rx="2.5"/><path d="M8 4.5h10.5a2 2 0 012 2V17"/><path d="M6.5 17l3.2-3.4 2.3 2.3 2-2.1 1.5 1.6"/></symbol>
   <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></symbol>
   <symbol id="i-image" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="3"/><circle cx="9" cy="9" r="1.7"/><path d="M20.5 16l-5-5-8 8.5"/></symbol>
   <symbol id="i-video" viewBox="0 0 24 24"><rect x="3.5" y="5.5" width="17" height="13" rx="3"/><path d="M10.5 9.5v5l4-2.5z"/></symbol>
@@ -217,6 +220,7 @@
     <div class="v-title"><div class="v-name" id="v-name"></div><div class="v-sub" id="v-sub"></div></div>
     <div class="v-actions">
       <button class="vbtn hide-s" id="v-play" type="button" aria-label="Start slideshow" title="Slideshow (P)"><svg class="i"><use href="#i-play"/></svg></button>
+      <button class="vbtn" id="v-similar" type="button" aria-label="Find similar photos" title="Find similar photos" hidden><svg class="i"><use href="#i-similar"/></svg></button>
       <button class="vbtn" id="v-edit" type="button" aria-label="Edit with AI" title="Edit with AI (E)" hidden><svg class="i"><use href="#i-wand"/></svg></button>
       <button class="vbtn" id="v-info" type="button" aria-label="Details" aria-pressed="false" title="Details (I)"><svg class="i"><use href="#i-info"/></svg></button>
       <button class="vbtn" id="v-share" type="button" aria-label="Share" title="Share"><svg class="i"><use href="#i-share"/></svg></button>
