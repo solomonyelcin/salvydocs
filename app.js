@@ -544,7 +544,7 @@
     const px = rows ? 160 : bucket(Math.max(targetH() * f._ar, targetH()) * dpr() * 1.15);
     const img = new Image(); img.alt = ""; img.decoding = "async"; img.loading = "lazy"; img.referrerPolicy = "no-referrer";
     let tries = 0;
-    img.onload = () => img.classList.add("ok");
+    img.onload = () => { img.classList.add("ok"); f._tsrc = img.currentSrc || img.src; };
     img.onerror = () => { if (tries++ === 0) img.src = driveThumb(f.id, px); else img.remove(); };
     img.src = thumbSrc(f, px);
     th.append(img); th.insertAdjacentHTML("beforeend", `<span class="ph">${ic(k === "doc" ? "file" : k)}</span>`);
@@ -779,7 +779,7 @@
   function endSelect() { S.select = false; S.selected.clear(); $$(".tile.sel").forEach((t) => t.classList.remove("sel")); updateSel(); }
 
   /* ---------- viewer ---------- */
-  const V = { el: $("#viewer"), idx: -1, list: [], pushed: false, play: null, img: null, vid: null, mode: "", Z: { s: 1, x: 0, y: 0 }, fit: { w: 0, h: 0, cx: 0, cy: 0 }, nat: { w: 0, h: 0 }, maxS: 6, big: false, opener: null, idle: 0, info: false, cleanup: null };
+  const V = { el: $("#viewer"), idx: -1, list: [], pushed: false, play: null, img: null, vid: null, mode: "", Z: { s: 1, x: 0, y: 0 }, fit: { w: 0, h: 0, cx: 0, cy: 0 }, nat: { w: 0, h: 0 }, maxS: 6, big: false, rot: new Map(), tok: 0, layer: null, gloss: null, enter: false, fresh: false, opener: null, idle: 0, info: false, cleanup: null };
   const stage = $("#v-stage");
   const inertEls = () => [$("#bar"), $("#page"), $("#selbar")];
   const mediaUrl = (f) => `${API}/files/${f.id}?alt=media&key=${CFG.API_KEY}`;
@@ -797,7 +797,7 @@
     if (V.el.hidden) {
       V.opener = document.activeElement; V.el.hidden = false; document.body.classList.add("lock");
       inertEls().forEach((e) => (e.inert = true));
-      V.pushed = false;
+      V.pushed = false; V.fresh = true;
       if (push) { history.pushState(null, "", hashFor({ f: list[i].id })); V.pushed = true; }
       $("#v-close").focus({ preventScroll: true });
     }
@@ -806,7 +806,7 @@
 
   function teardown() {
     if (V.vid) { try { V.vid.pause(); V.vid.removeAttribute("src"); V.vid.load(); } catch { /* ignore */ } }
-    V.cleanup?.(); V.cleanup = null; V.vid = null; V.img = null;
+    V.cleanup?.(); V.cleanup = null; V.vid = null; V.img = null; V.layer = null; V.gloss = null; V.tok = (V.tok || 0) + 1;
     stage.textContent = ""; stage.className = "v-stage";
   }
 
@@ -831,9 +831,13 @@
     i = clamp(i, 0, V.list.length - 1); V.idx = i;
     const f = V.list[i];
     const dir = V.idx0 == null ? 0 : Math.sign(i - V.idx0); V.idx0 = i; V.dir = dir;
+    const old = V.layer && !V.el.hidden && dir ? V.layer : null;
     teardown(); V.Z = { s: 1, x: 0, y: 0 }; V.big = false;
+    V.enter = !!dir || V.fresh; V.fresh = false;
+    if (old) ghostOut(old);
     setMode(f._k === "image" ? "img" : f._k === "video" ? "vid" : "frame");
     if (V.mode === "img") mountImage(f, i); else if (V.mode === "vid") mountVideo(f); else mountFrame(f);
+    paintFav(); paintRot();
     $("#v-name").textContent = f.name;
     $("#v-sub").textContent = `${i + 1} of ${V.list.length}, ${fmtDate(f._t)}`;
     $("#v-prev").hidden = i === 0; $("#v-next").hidden = i === V.list.length - 1;
@@ -845,25 +849,106 @@
   }
 
   /* ----- photos: fit to screen, zoom, pan ----- */
+  /* ----- favourites, rotate, options, shortcuts ----- */
+  const FAV = new Set((() => { try { return JSON.parse(store.get("dg-favs", "[]")); } catch { return []; } })());
+  const paintFav = () => { const f = V.list[V.idx], b = $("#v-fav"); if (!f) return; const on = FAV.has(f.id); b.setAttribute("aria-pressed", String(on)); b.title = on ? "Remove from favourites (H)" : "Add to favourites (H)"; b.setAttribute("aria-label", on ? "Remove from favourites" : "Add to favourites"); };
+  function toggleFav() { const f = V.list[V.idx]; if (!f) return; FAV.has(f.id) ? FAV.delete(f.id) : FAV.add(f.id); store.set("dg-favs", JSON.stringify([...FAV])); paintFav(); toast(FAV.has(f.id) ? "Added to favourites" : "Removed from favourites"); }
+  const paintRot = () => { $("#v-rotate").hidden = V.mode !== "img"; };
+  function rotateBy(d) {
+    const f = V.list[V.idx]; if (!f || V.mode !== "img") return;
+    V.rot.set(f.id, (((V.rot.get(f.id) || 0) + d) % 360 + 360) % 360); V.Z = { s: 1, x: 0, y: 0 }; fitImage();
+  }
+  async function copyImage() {
+    const f = V.list[V.idx]; if (!f || f._k !== "image") return;
+    try {
+      if (!navigator.clipboard || !window.ClipboardItem) throw 0;
+      const blob = await (await fetch(mediaUrl(f))).blob();
+      const bmp = await createImageBitmap(blob), c = el("canvas"); c.width = bmp.width; c.height = bmp.height; c.getContext("2d").drawImage(bmp, 0, 0);
+      const png = await new Promise((r) => c.toBlob(r, "image/png"));
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]); toast("Photo copied");
+    } catch { toast("Couldn't copy the photo on this browser. Try Download."); }
+  }
+  function toggleOpts(force) {
+    const pop = $("#v-opts"), open = force ?? pop.hidden;
+    if (!open) { pop.hidden = true; $("#v-optsbtn").setAttribute("aria-expanded", "false"); return; }
+    const seg = (key, vals) => `<div class="seg" data-k="${key}">${vals.map(([v, l]) => `<button type="button" data-v="${v}" aria-pressed="${String(VO[key]) === String(v)}">${l}</button>`).join("")}</div>`;
+    pop.innerHTML = `<h3>Viewer</h3>
+      <div class="vo-row"><span>Transition</span>${seg("tr", [["glide", "Glide"], ["fade", "Fade"], ["zoom", "Zoom"], ["flip", "Flip"], ["none", "Off"]])}</div>
+      <div class="vo-row"><span>Glossy shine</span>${seg("gloss", [[true, "On"], [false, "Off"]])}</div>
+      <div class="vo-row"><span>Slideshow speed</span>${seg("speed", [[3, "3s"], [5, "5s"], [8, "8s"]])}</div>
+      <div class="vo-row"><span>Slow zoom in slideshow</span>${seg("kb", [[true, "On"], [false, "Off"]])}</div>
+      <button type="button" class="btn sm" id="vo-keys">Keyboard shortcuts</button>`;
+    pop.hidden = false; $("#v-optsbtn").setAttribute("aria-expanded", "true");
+  }
+  function toggleKeys() {
+    const k = $("#v-keys"); k.hidden = !k.hidden; if (k.hidden) return;
+    k.innerHTML = `<div class="vk-card"><h3>Keyboard shortcuts</h3><dl>${[["← →", "Previous / next"], ["+ − 0", "Zoom in / out / fit"], ["R", "Rotate photo"], ["H", "Favourite"], ["I", "Details"], ["P", "Slideshow"], ["D", "Download"], ["F", "Full screen"], ["E", "Edit with AI"], ["Space", "Play / pause video"], ["J L", "Video −10s / +10s"], ["?", "This list"], ["Esc", "Close"]].map(([a, b]) => `<dt><kbd>${a}</kbd></dt><dd>${b}</dd>`).join("")}</dl><button class="btn sm" type="button" id="vk-x">Close</button></div>`;
+    $("#vk-x").onclick = toggleKeys;
+  }
+
+  /* ----- viewer transitions & options ----- */
+  const VO = Object.assign({ tr: "glide", gloss: true, speed: 4, kb: true }, (() => { try { return JSON.parse(store.get("dg-vopts", "{}")); } catch { return {}; } })());
+  const saveVO = () => store.set("dg-vopts", JSON.stringify(VO));
+  const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const trName = () => (reduced() || VO.tr === "none" ? "" : VO.tr);
+  function applyEnter(node, { gloss } = {}) {
+    const tr = trName(); if (!tr || !V.enter) return;
+    node.classList.add("tr-in", "tr-" + tr); node.style.setProperty("--dx", (V.dir || 1) * 56 + "px"); node.style.setProperty("--dir", V.dir || 1);
+    if (gloss && VO.gloss) { const g = el("div", "v-gloss"); g.setAttribute("aria-hidden", "true"); node.append(g); V.gloss = g; setTimeout(() => g.remove(), 1100); }
+  }
+  function ghostOut(old) {
+    const tr = trName(); if (!tr || V.mode === "frame") { return; }
+    old.className = "v-layer v-ghost out-" + tr; old.style.setProperty("--dx", (V.dir || 1) * -56 + "px"); old.style.setProperty("--dir", V.dir || 1);
+    old.querySelectorAll(".v-gloss").forEach((g) => g.remove());
+    stage.querySelectorAll(".v-ghost").forEach((g) => g.remove()); // fast swiping never piles up layers
+    stage.append(old); old.addEventListener("animationend", () => old.remove(), { once: true }); setTimeout(() => old.remove(), 600);
+  }
+
+  // Loads one URL; resolves with it when the picture is ready, rejects on error or timeout.
+  function probe(url, ms) {
+    return new Promise((res, rej) => {
+      const im = new Image(); im.referrerPolicy = "no-referrer"; let done = false;
+      const end = (ok) => { if (done) return; done = true; clearTimeout(t); ok ? res(url) : (im.src = "", rej(new Error("load"))); };
+      const t = setTimeout(() => end(false), ms);
+      im.onload = () => end(true); im.onerror = () => end(false); im.src = url;
+    });
+  }
+  // The first good source wins: Google's thumbnail link, then (if that is slow or fails) Drive's thumbnail endpoint.
+  function bestSource(f, px) {
+    return new Promise((res, rej) => {
+      const urls = [thumbSrc(f, px)]; if (f.thumbnailLink) urls.push(driveThumb(f.id, px));
+      let started = 0, failed = 0, won = false;
+      const run = () => {
+        if (won || started >= urls.length) return; const u = urls[started++];
+        probe(u, 12000).then((x) => { if (!won) { won = true; res(x); } }, () => { failed++; if (failed >= urls.length) { if (!won) rej(new Error("none")); } else run(); });
+      };
+      run(); if (urls.length > 1) setTimeout(run, 2200); // a slow first source gets a competitor
+    });
+  }
+
   function mountImage(f, i) {
-    const img = new Image(); img.className = "v-img" + (V.dir ? " slide" : ""); if (V.dir) img.style.setProperty("--dx", V.dir * 48 + "px"); img.alt = f.name; img.draggable = false; img.referrerPolicy = "no-referrer";
+    const img = new Image(); img.className = "v-img"; img.alt = f.name; img.draggable = false; img.referrerPolicy = "no-referrer";
     const m = f.imageMediaMetadata; let nw = m?.width || 0, nh = m?.height || 0;
     if (m && (m.rotation === 1 || m.rotation === 3)) [nw, nh] = [nh, nw];
     V.nat = { w: nw, h: nh }; V.img = img;
-    const spin = el("div", "v-spin"); stage.append(spin, img);
-    let step = 0;
-    img.onload = () => { spin.remove(); fitImage(); };
-    img.onerror = () => {
-      step++;
-      if (step === 1) img.src = driveThumb(f.id, 2000);
-      else if (step === 2) img.src = mediaUrl(f);
-      else { spin.remove(); toast("This photo couldn't be loaded. Try Open in Drive from the details panel."); }
-    };
-    img.src = thumbSrc(f, 800);
-    const hi = new Image(); hi.referrerPolicy = "no-referrer";
-    hi.onload = () => { if (V.idx === i && V.img === img) img.src = hi.src; };
-    hi.src = thumbSrc(f, 2400);
-    for (const j of [i + 1, i - 1]) { const n = V.list[j]; if (n && n._k === "image") new Image().src = thumbSrc(n, 1600); }
+    const layer = el("div", "v-layer"); layer.append(img); V.layer = layer; applyEnter(layer, { gloss: true });
+    const spin = el("div", "v-spin"); stage.append(layer);
+    const tok = V.tok, live = () => V.img === img && V.tok === tok;
+    img.onload = () => { fitImage(); };
+    const placeholder = f._tsrc || null;
+    if (placeholder) { img.classList.add("soft"); img.src = placeholder; } else stage.append(spin);
+    const sharpen = (src) => { if (!live()) return; img.src = src; img.classList.remove("soft"); spin.remove(); };
+    bestSource(f, 1280).then(sharpen, async () => {
+      if (!live()) return;
+      if (!placeholder && f._size && f._size < 25e6) { // last resort, only when there is nothing on screen at all
+        try { await probe(mediaUrl(f), 30000); return sharpen(mediaUrl(f)); } catch { /* fall through */ }
+      }
+      if (!live()) return; spin.remove(); img.classList.remove("soft");
+      toast(placeholder ? "Showing a small preview. Open in Drive for the full photo." : "This photo couldn't be loaded. Try Open in Drive from the details panel.");
+    });
+    bestSource(f, 2400).then((src) => { if (live() && !V.big) { const cur = img.src; if (cur !== src) { img.src = src; img.classList.remove("soft"); spin.remove(); } } }, () => {});
+    for (const j of [i + 1, i - 1]) { const n = V.list[j]; if (n && n._k === "image") new Image().src = thumbSrc(n, 1280); }
+    if (V.play && VO.kb && trName()) { img.classList.add("kb"); img.style.setProperty("--kb", VO.speed + 0.6 + "s"); }
     fitImage(); paintZoom();
   }
 
@@ -871,17 +956,21 @@
   function fitImage() {
     const im = V.img; if (!im) return;
     const SW = stage.clientWidth, SH = stage.clientHeight; if (!SW || !SH) return;
-    const ar = im.naturalWidth ? im.naturalWidth / im.naturalHeight : V.nat.w ? V.nat.w / V.nat.h : 0;
-    if (!ar) return;
+    const ar0 = im.naturalWidth ? im.naturalWidth / im.naturalHeight : V.nat.w ? V.nat.w / V.nat.h : 0;
+    if (!ar0) return;
+    const rot = ((V.list[V.idx] && V.rot.get(V.list[V.idx].id)) || 0) % 360, sw90 = rot === 90 || rot === 270;
+    const ar = sw90 ? 1 / ar0 : ar0, natW = sw90 ? V.nat.h : V.nat.w;
     const wide = SW >= 900, padT = wide ? 60 : 0, padB = wide ? 88 : 0, padX = wide ? 70 : 0;
     const aw = Math.max(80, SW - 2 * padX), ah = Math.max(80, SH - padT - padB);
     let w, h; if (aw / ah < ar) { w = aw; h = aw / ar; } else { h = ah; w = ah * ar; }
-    if (V.nat.w && w > V.nat.w * 2) { const k = (V.nat.w * 2) / w; w *= k; h *= k; } // never blow small photos up past 2x
+    if (natW && w > natW * 2) { const k = (natW * 2) / w; w *= k; h *= k; } // never blow small photos up past 2x
     w = Math.round(w); h = Math.round(h);
     const left = Math.round((SW - w) / 2), top = Math.round(padT + (ah - h) / 2);
-    Object.assign(im.style, { width: w + "px", height: h + "px", left: left + "px", top: top + "px", visibility: "visible" });
+    const ew = sw90 ? h : w, eh = sw90 ? w : h; // the element itself stays unrotated; CSS rotates it around its centre
+    Object.assign(im.style, { width: ew + "px", height: eh + "px", left: Math.round(left + w / 2 - ew / 2) + "px", top: Math.round(top + h / 2 - eh / 2) + "px", visibility: "visible" });
+    if (V.gloss) Object.assign(V.gloss.style, { left: left + "px", top: top + "px", width: w + "px", height: h + "px" });
     V.fit = { w, h, cx: left + w / 2, cy: top + h / 2 };
-    V.maxS = clamp(V.nat.w ? (V.nat.w * 2) / w : 6, 4, 14);
+    V.maxS = clamp(natW ? (natW * 2) / w : 6, 4, 14);
     clampPan(); applyZ();
   }
 
@@ -893,11 +982,13 @@
   }
   function applyZ() {
     const im = V.img; if (!im) return;
-    im.style.transform = `translate(${V.Z.x}px,${V.Z.y}px) scale(${V.Z.s})`;
+    const f0 = V.list[V.idx], rot = (f0 && V.rot.get(f0.id)) || 0;
+    im.style.transform = `translate(${V.Z.x}px,${V.Z.y}px) scale(${V.Z.s})` + (rot ? ` rotate(${rot}deg)` : "");
+    if (V.Z.s > 1.02) im.classList.remove("kb");
     stage.classList.toggle("zoomed", V.Z.s > 1.02); paintZoom();
     if (V.Z.s > 1.4 && !V.big) { // sharper pixels once the person zooms in
       V.big = true; const f = V.list[V.idx], idx = V.idx, hi = new Image(); hi.referrerPolicy = "no-referrer";
-      hi.onload = () => { if (V.idx === idx && V.img === im) im.src = hi.src; };
+      hi.onload = () => { if (V.idx === idx && V.img === im) { im.src = hi.src; im.classList.remove("soft"); } };
       hi.src = thumbSrc(f, 4096);
     }
   }
@@ -989,7 +1080,7 @@
   function mountFrame(f, why) {
     setMode("frame");
     const fr = el("iframe", "v-frame"); fr.src = `https://drive.google.com/file/d/${f.id}/preview`; fr.allow = "autoplay; fullscreen"; fr.allowFullscreen = true; fr.title = f.name;
-    stage.append(fr);
+    applyEnter(fr); stage.append(fr);
     const note = el("div", "v-note"); note.innerHTML = `${why ? esc(why) + " " : ""}Not loading? <a href="${esc(driveView(f))}" target="_blank" rel="noopener">Open in Drive</a>`;
     stage.append(note);
   }
@@ -1020,7 +1111,7 @@
           <button type="button" class="vp-fs" aria-label="Full screen" title="Full screen (F)">${ic("expand")}</button>
         </div>
       </div>`;
-    stage.append(vp);
+    applyEnter(vp, { gloss: true }); stage.append(vp);
     const v = vp.querySelector("video"), q = (s) => vp.querySelector(s);
     const seek = q(".vp-seek"), vol = q(".vp-vol"), big = q(".vp-big"), wait = q(".vp-wait"), hint = q(".vp-hint");
     V.vid = v; let scrub = false, hintT = 0, failT = 0, done = false;
@@ -1123,7 +1214,8 @@
     if (f.videoMediaMetadata?.durationMillis) rows.push(["Length", fmtDur(+f.videoMediaMetadata.durationMillis)]);
     if (folder) rows.push(["Album", folder]);
     $("#v-panel").innerHTML = `<h3>${esc(f.name)}</h3><dl>${rows.map(([a, b]) => `<dt>${esc(a)}</dt><dd>${esc(b)}</dd>`).join("")}</dl>
-      <div class="acts"><a class="btn sm" href="${esc(driveView(f))}" target="_blank" rel="noopener">${ic("external")}Open in Drive</a><button class="btn sm" type="button" id="p-copy">${ic("link")}Copy link</button></div>`;
+      <div class="acts"><a class="btn sm" href="${esc(driveView(f))}" target="_blank" rel="noopener">${ic("external")}Open in Drive</a><button class="btn sm" type="button" id="p-copy">${ic("link")}Copy link</button>${f._k === "image" ? `<button class="btn sm" type="button" id="p-img">${ic("copy")}Copy photo</button>` : ""}</div>`;
+    $("#p-img")?.addEventListener("click", copyImage);
     $("#p-copy").onclick = async () => toast((await copyText(fileUrl(f))) ? "Link copied" : "Couldn't copy the link");
   }
 
@@ -1134,7 +1226,7 @@
     if (!V.list.some((f) => f._k === "image")) { toast("Slideshows play photos only."); return; }
     V.play = setInterval(() => {
       for (let k = 1; k <= V.list.length; k++) { const j = (V.idx + k) % V.list.length; if (V.list[j]._k === "image") { go(j); return; } }
-    }, 4000);
+    }, VO.speed * 1000);
     $("#v-play").innerHTML = ic("pause"); $("#v-play").setAttribute("aria-label", "Pause slideshow"); toast("Slideshow playing. Press P to pause.");
   }
   function stopPlay() { if (!V.play) return; clearInterval(V.play); V.play = null; $("#v-play").innerHTML = ic("play"); $("#v-play").setAttribute("aria-label", "Start slideshow"); }
@@ -1354,6 +1446,16 @@
     $("#v-close").onclick = () => closeViewer();
     $("#v-prev").onclick = () => step(-1); $("#v-next").onclick = () => step(1);
     $("#v-info").onclick = toggleInfo; $("#v-play").onclick = togglePlay;
+    $("#v-fav").onclick = toggleFav; $("#v-rotate").onclick = () => rotateBy(90);
+    $("#v-optsbtn").onclick = () => toggleOpts();
+    $("#v-opts").addEventListener("click", (e) => {
+      if (e.target.closest("#vo-keys")) { toggleOpts(false); toggleKeys(); return; }
+      const b = e.target.closest(".seg button"); if (!b) return; const k = b.parentElement.dataset.k, raw = b.dataset.v;
+      VO[k] = raw === "true" ? true : raw === "false" ? false : isNaN(+raw) ? raw : +raw; saveVO();
+      b.parentElement.querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+      if (k === "speed" && V.play) { stopPlay(); togglePlay(); }
+    });
+    $("#v-keys").addEventListener("click", (e) => { if (e.target.id === "v-keys") toggleKeys(); });
     $("#v-share").onclick = () => { const f = V.list[V.idx]; shareLink(fileUrl(f), f.name); };
     $("#v-download").onclick = () => downloadFiles([V.list[V.idx]]);
     if (document.fullscreenEnabled) $("#v-full").onclick = toggleFS; else $("#v-full").hidden = true;
@@ -1382,7 +1484,7 @@
         if (EDIT.open) { if (e.key === "Escape") { closeEditor(); e.preventDefault(); } return; }
         const k = e.key, inBar = !!e.target.closest?.(".vp-bar"), onRange = e.target.type === "range";
         if (e.ctrlKey || e.metaKey || e.altKey) return;
-        if (k === "Escape") { if (!document.fullscreenElement) closeViewer(); wake(); return; }
+        if (k === "Escape") { if (!$("#v-keys").hidden) toggleKeys(); else if (!$("#v-opts").hidden) toggleOpts(false); else if (!document.fullscreenElement) closeViewer(); wake(); return; }
         if (inBar && (k === " " || k === "Enter")) { wake(); return; } // let a focused control handle its own key
         if (onRange && /^Arrow/.test(k)) { wake(); return; }
         const vc = V.vctl, isImg = V.mode === "img";
@@ -1401,6 +1503,9 @@
         else if (isImg && V.Z.s > 1.02 && /^Arrow/.test(k)) { e.preventDefault(); panBy(k === "ArrowLeft" ? 90 : k === "ArrowRight" ? -90 : 0, k === "ArrowUp" ? 90 : k === "ArrowDown" ? -90 : 0); }
         else if (k === "i" || k === "I") toggleInfo();
         else if (k === "p" || k === "P") togglePlay();
+        else if (isImg && (k === "r" || k === "R")) rotateBy(e.shiftKey ? -90 : 90);
+        else if (k === "h" || k === "H") toggleFav();
+        else if (k === "?") toggleKeys();
         else if ((k === "e" || k === "E") && !$("#v-edit").hidden) openEditor();
         else if (k === "d" || k === "D") downloadFiles([V.list[V.idx]]);
         else if ((k === "f" || k === "F") && (document.fullscreenEnabled || V.vid?.webkitEnterFullscreen)) toggleFS();

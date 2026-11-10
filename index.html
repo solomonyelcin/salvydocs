@@ -31,6 +31,9 @@
   <symbol id="i-mark" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="3"/><rect x="8" y="8" width="8" height="8" rx="1.5"/></symbol>
   <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></symbol>
   <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></symbol>
+  <symbol id="i-heart" viewBox="0 0 24 24"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"/></symbol>
+  <symbol id="i-rotate" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.6-5.9M20 4v4.5h-4.5"/></symbol>
   <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h8M18 7h2M4 17h2M12 17h8"/><circle cx="15" cy="7" r="2.2"/><circle cx="9" cy="17" r="2.2"/></symbol>
   <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
   <symbol id="i-select" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3.5"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/></symbol>
@@ -219,12 +222,15 @@
     <button class="vbtn" id="v-close" type="button" aria-label="Close viewer"><svg class="i"><use href="#i-x"/></svg></button>
     <div class="v-title"><div class="v-name" id="v-name"></div><div class="v-sub" id="v-sub"></div></div>
     <div class="v-actions">
+      <button class="vbtn" id="v-fav" type="button" aria-label="Add to favourites" aria-pressed="false" title="Add to favourites (H)"><svg class="i"><use href="#i-heart"/></svg></button>
+      <button class="vbtn" id="v-rotate" type="button" aria-label="Rotate" title="Rotate (R)" hidden><svg class="i"><use href="#i-rotate"/></svg></button>
       <button class="vbtn hide-s" id="v-play" type="button" aria-label="Start slideshow" title="Slideshow (P)"><svg class="i"><use href="#i-play"/></svg></button>
       <button class="vbtn" id="v-similar" type="button" aria-label="Find similar photos" title="Find similar photos" hidden><svg class="i"><use href="#i-similar"/></svg></button>
       <button class="vbtn" id="v-edit" type="button" aria-label="Edit with AI" title="Edit with AI (E)" hidden><svg class="i"><use href="#i-wand"/></svg></button>
       <button class="vbtn" id="v-info" type="button" aria-label="Details" aria-pressed="false" title="Details (I)"><svg class="i"><use href="#i-info"/></svg></button>
       <button class="vbtn" id="v-share" type="button" aria-label="Share" title="Share"><svg class="i"><use href="#i-share"/></svg></button>
       <button class="vbtn" id="v-download" type="button" aria-label="Download" title="Download (D)"><svg class="i"><use href="#i-download"/></svg></button>
+      <button class="vbtn" id="v-optsbtn" type="button" aria-label="Viewer options" aria-expanded="false" title="Viewer options"><svg class="i"><use href="#i-sliders"/></svg></button>
       <button class="vbtn hide-s" id="v-full" type="button" aria-label="Full screen" title="Full screen (F)"><svg class="i"><use href="#i-expand"/></svg></button>
     </div>
   </div>
@@ -237,6 +243,8 @@
   <button class="v-nav prev" id="v-prev" type="button" aria-label="Previous"><svg class="i"><use href="#i-left"/></svg></button>
   <button class="v-nav next" id="v-next" type="button" aria-label="Next"><svg class="i"><use href="#i-right"/></svg></button>
   <div class="v-strip" id="v-strip" aria-hidden="true"></div>
+  <div class="v-opts" id="v-opts" hidden></div>
+  <div class="v-keys" id="v-keys" hidden></div>
   <aside class="v-panel" id="v-panel" hidden aria-label="Details"></aside>
   <section class="ed" id="ed" hidden role="dialog" aria-modal="true" aria-labelledby="ed-h">
     <div class="ed-top">

@@ -504,9 +504,6 @@ h1{background:linear-gradient(100deg,var(--ink) 34%,var(--accent) 110%);-webkit-
 @keyframes hero-in{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:none}}
 .viewer{animation:viewer-in .26s cubic-bezier(.2,.7,.2,1)}
 @keyframes viewer-in{from{opacity:0;transform:scale(.985)}to{opacity:1;transform:none}}
-.v-img.slide{animation:v-slide .34s cubic-bezier(.2,.7,.2,1)}
-@keyframes v-slide{from{opacity:0;transform:translateX(var(--dx,0))}}
-.vp.slide{animation:v-slide .34s cubic-bezier(.2,.7,.2,1)}
 .toast{animation:toast-in .26s cubic-bezier(.2,.7,.2,1)}
 @keyframes toast-in{from{opacity:0;transform:translate(-50%,14px)}to{opacity:1;transform:translate(-50%,0)}}
 .sheet-panel{animation:sheet-in .28s cubic-bezier(.2,.8,.2,1)}
@@ -520,4 +517,44 @@ h1{background:linear-gradient(100deg,var(--ink) 34%,var(--accent) 110%);-webkit-
 .totop.on{opacity:1;transform:none;pointer-events:auto}
 .totop .i{transform:rotate(-90deg)}
 body.selecting .totop{bottom:calc(86px + env(safe-area-inset-bottom))}
-@media(prefers-reduced-motion:reduce){.content.enter,.boot .hero-text>*,.boot .reel,.viewer,.v-img.slide,.toast,.sheet-panel,.swatches .sw,:root[data-glass] body::before{animation:none!important}}
+@media(prefers-reduced-motion:reduce){.content.enter,.boot .hero-text>*,.boot .reel,.viewer,.v-layer,.v-gloss,.v-img.kb,.toast,.sheet-panel,.swatches .sw,:root[data-glass] body::before{animation:none!important}}
+
+/* ---- viewer: layers, glossy transitions, options (transform/opacity only, so they stay smooth on phones) ---- */
+.v-layer{position:absolute;inset:0;pointer-events:none;contain:layout paint}
+.v-layer .v-img{pointer-events:auto}
+.v-img.soft{opacity:.92}
+.v-img{transition:transform .2s cubic-bezier(.2,.7,.2,1),opacity .3s ease}
+.v-layer,.vp{backface-visibility:hidden}
+.tr-in,.v-ghost{will-change:transform,opacity}
+.tr-in{animation-duration:.38s;animation-timing-function:cubic-bezier(.22,.8,.24,1);animation-fill-mode:backwards}
+.tr-glide{animation-name:tr-glide}.tr-fade{animation-name:tr-fade}.tr-zoom{animation-name:tr-zoom}.tr-flip{animation-name:tr-flip}
+@keyframes tr-glide{from{opacity:0;transform:translate3d(var(--dx),0,0) scale(.97)}}
+@keyframes tr-fade{from{opacity:0}}
+@keyframes tr-zoom{from{opacity:0;transform:scale(1.14)}}
+@keyframes tr-flip{from{opacity:0;transform:perspective(1100px) rotateY(calc(var(--dir) * 55deg)) scale(.94)}}
+.v-ghost{z-index:2;animation-duration:.32s;animation-timing-function:cubic-bezier(.4,0,.8,.4);animation-fill-mode:forwards}
+.out-glide{animation-name:out-glide}.out-fade{animation-name:out-fade}.out-zoom{animation-name:out-zoom}.out-flip{animation-name:out-flip}
+@keyframes out-glide{to{opacity:0;transform:translate3d(var(--dx),0,0) scale(.97)}}
+@keyframes out-fade{to{opacity:0}}
+@keyframes out-zoom{to{opacity:0;transform:scale(.9)}}
+@keyframes out-flip{to{opacity:0;transform:perspective(1100px) rotateY(calc(var(--dir) * -55deg)) scale(.94)}}
+.v-gloss{position:absolute;overflow:hidden;pointer-events:none;inset:0;z-index:3}
+.v-gloss::before{content:"";position:absolute;top:-10%;bottom:-10%;left:0;width:55%;background:linear-gradient(105deg,transparent 20%,rgba(255,255,255,.34) 48%,rgba(255,255,255,.08) 60%,transparent 80%);transform:translate3d(-130%,0,0) skewX(-12deg);animation:gloss-sweep .85s cubic-bezier(.3,.6,.3,1) .05s forwards;will-change:transform}
+@keyframes gloss-sweep{to{transform:translate3d(260%,0,0) skewX(-12deg)}}
+.vp>.v-gloss{inset:0}
+.v-img.kb{animation:kb var(--kb,5s) linear forwards}
+@keyframes kb{from{scale:1}to{scale:1.07}}
+@media(max-width:700px){.tr-in{animation-duration:.3s}.v-ghost{animation-duration:.24s}.tr-flip{animation-name:tr-glide}.out-flip{animation-name:out-glide}}
+.vbtn[aria-pressed="true"]#v-fav{color:#ff5d73}.vbtn[aria-pressed="true"]#v-fav svg{fill:currentColor}
+.v-opts{position:absolute;z-index:6;top:calc(60px + env(safe-area-inset-top));right:12px;width:min(320px,calc(100vw - 24px));padding:14px;border-radius:16px;background:rgba(20,22,30,.86);color:#fff;border:1px solid rgba(255,255,255,.14);box-shadow:0 18px 50px rgba(0,0,0,.45)}
+.v-opts h3{margin:0 0 8px;font-size:14px}
+.vo-row{display:flex;flex-direction:column;gap:6px;margin:10px 0}
+.vo-row>span{font-size:12px;opacity:.7}
+.seg{display:flex;flex-wrap:wrap;gap:6px}
+.seg button{padding:6px 11px;border-radius:999px;border:1px solid rgba(255,255,255,.2);background:transparent;color:inherit;font:inherit;font-size:13px;cursor:pointer}
+.seg button[aria-pressed="true"]{background:#fff;color:#111;border-color:#fff}
+.v-keys{position:absolute;inset:0;z-index:8;display:grid;place-items:center;background:rgba(0,0,0,.55)}
+.v-keys[hidden],.v-opts[hidden]{display:none}
+.vk-card{background:rgba(20,22,30,.94);color:#fff;padding:18px 20px;border-radius:18px;max-width:92vw;max-height:86vh;overflow:auto}
+.vk-card h3{margin:0 0 10px}.vk-card dl{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;margin:0 0 12px;font-size:14px}.vk-card dd{margin:0;opacity:.8}
+.vk-card kbd{font:inherit;font-size:12px;padding:2px 7px;border-radius:6px;background:rgba(255,255,255,.14)}
