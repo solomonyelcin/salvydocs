@@ -90,3 +90,4 @@ Then choose *Group by, My groups*. Faces are never scanned, so people groups are
 - Opens instantly: the thumbnail already shown in the grid appears at once, then sharper versions load in the background (with a backup source if Google's thumbnail is slow). The full original is never downloaded just to view a photo.
 - Glossy transitions (Glide, Fade, Zoom, Flip) with a light shine sweep, for photos, videos and documents. Transform/opacity only, shorter on phones, off with "reduce motion".
 - Rotate (R), favourites (H, saved in the browser), copy photo, viewer options (transition, shine, slideshow speed, slow zoom), keyboard shortcuts (?).
+- On touch screens the photo follows your finger as you swipe: it softly blurs and shrinks while the next photo slides in from the side. Release past a quarter of the screen (or flick) to switch, otherwise it springs back. Swipe down to close.

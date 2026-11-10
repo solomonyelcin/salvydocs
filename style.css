@@ -558,3 +558,7 @@ body.selecting .totop{bottom:calc(86px + env(safe-area-inset-bottom))}
 .vk-card{background:rgba(20,22,30,.94);color:#fff;padding:18px 20px;border-radius:18px;max-width:92vw;max-height:86vh;overflow:auto}
 .vk-card h3{margin:0 0 10px}.vk-card dl{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;margin:0 0 12px;font-size:14px}.vk-card dd{margin:0;opacity:.8}
 .vk-card kbd{font:inherit;font-size:12px;padding:2px 7px;border-radius:6px;background:rgba(255,255,255,.14)}
+
+.v-peek{z-index:1;display:grid;place-items:center;will-change:transform,opacity,filter}
+.v-peekimg{max-width:100%;max-height:100%;object-fit:contain;pointer-events:none;user-select:none}
+.v-layer{will-change:auto}

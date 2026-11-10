@@ -779,7 +779,7 @@
   function endSelect() { S.select = false; S.selected.clear(); $$(".tile.sel").forEach((t) => t.classList.remove("sel")); updateSel(); }
 
   /* ---------- viewer ---------- */
-  const V = { el: $("#viewer"), idx: -1, list: [], pushed: false, play: null, img: null, vid: null, mode: "", Z: { s: 1, x: 0, y: 0 }, fit: { w: 0, h: 0, cx: 0, cy: 0 }, nat: { w: 0, h: 0 }, maxS: 6, big: false, rot: new Map(), tok: 0, layer: null, gloss: null, enter: false, fresh: false, opener: null, idle: 0, info: false, cleanup: null };
+  const V = { el: $("#viewer"), idx: -1, list: [], pushed: false, play: null, img: null, vid: null, mode: "", Z: { s: 1, x: 0, y: 0 }, fit: { w: 0, h: 0, cx: 0, cy: 0 }, nat: { w: 0, h: 0 }, maxS: 6, big: false, swiping: false, skipEnter: false, peek: null, rot: new Map(), tok: 0, layer: null, gloss: null, enter: false, fresh: false, opener: null, idle: 0, info: false, cleanup: null };
   const stage = $("#v-stage");
   const inertEls = () => [$("#bar"), $("#page"), $("#selbar")];
   const mediaUrl = (f) => `${API}/files/${f.id}?alt=media&key=${CFG.API_KEY}`;
@@ -806,7 +806,7 @@
 
   function teardown() {
     if (V.vid) { try { V.vid.pause(); V.vid.removeAttribute("src"); V.vid.load(); } catch { /* ignore */ } }
-    V.cleanup?.(); V.cleanup = null; V.vid = null; V.img = null; V.layer = null; V.gloss = null; V.tok = (V.tok || 0) + 1;
+    V.cleanup?.(); V.cleanup = null; V.vid = null; V.img = null; V.layer = null; V.gloss = null; V.peek = null; V.tok = (V.tok || 0) + 1;
     stage.textContent = ""; stage.className = "v-stage";
   }
 
@@ -831,9 +831,10 @@
     i = clamp(i, 0, V.list.length - 1); V.idx = i;
     const f = V.list[i];
     const dir = V.idx0 == null ? 0 : Math.sign(i - V.idx0); V.idx0 = i; V.dir = dir;
-    const old = V.layer && !V.el.hidden && dir ? V.layer : null;
+    const skip = V.skipEnter; V.skipEnter = false; // a finished finger-swipe has already animated
+    const old = V.layer && !V.el.hidden && dir && !skip ? V.layer : null;
     teardown(); V.Z = { s: 1, x: 0, y: 0 }; V.big = false;
-    V.enter = !!dir || V.fresh; V.fresh = false;
+    V.enter = (!!dir || V.fresh) && !skip; V.fresh = false;
     if (old) ghostOut(old);
     setMode(f._k === "image" ? "img" : f._k === "video" ? "vid" : "frame");
     if (V.mode === "img") mountImage(f, i); else if (V.mode === "vid") mountVideo(f); else mountFrame(f);
@@ -1013,11 +1014,63 @@
   function zoomReset() { if (V.Z.s > 1.02) zoomTo(1, 0, 0); else { const [px, py] = mid(); zoomTo(V.nat.w ? Math.max(2, V.nat.w / V.fit.w) : 2.6, px, py); } }
   function panBy(dx, dy) { V.Z.x += dx; V.Z.y += dy; clampPan(); applyZ(); }
 
+  /* ----- finger swipe: the photo follows the finger, the next one slides in, with a soft blur ----- */
+  const rel0 = () => stage.clientWidth || 360;
+  function peekFor(n, dir) {
+    if (V.peek?.dir === dir && V.peek.id === n.id) return V.peek.el;
+    V.peek?.el.remove();
+    const box = el("div", "v-layer v-peek"); const im = new Image(); im.className = "v-peekimg"; im.alt = ""; im.referrerPolicy = "no-referrer"; im.draggable = false;
+    im.src = n._tsrc || thumbSrc(n, 800); box.append(im); stage.append(box); V.peek = { el: box, dir, id: n.id }; return box;
+  }
+  const blurOf = (p) => (reduced() ? "none" : `blur(${(p * 7).toFixed(1)}px)`);
+  function swipeMove(dx, dy) {
+    const L = V.layer; if (!L) return;
+    if (!gest.axis) { gest.axis = Math.abs(dx) >= Math.abs(dy) ? "x" : "y"; L.style.transition = "none"; L.style.willChange = "transform,opacity,filter"; stage.classList.add("dragging"); wake(); }
+    const W = rel0();
+    if (gest.axis === "x") {
+      const dir = dx < 0 ? 1 : -1, n = V.list[V.idx + dir], x = n ? dx : dx * 0.28, p = Math.min(1, Math.abs(x) / W);
+      L.style.transform = `translate3d(${x}px,0,0) scale(${1 - p * 0.08})`; L.style.opacity = String(1 - p * 0.55); L.style.filter = blurOf(p);
+      if (n) { const pk = peekFor(n, dir); pk.style.transition = "none"; pk.style.transform = `translate3d(${x + -dir * -W}px,0,0) scale(${0.92 + p * 0.08})`; pk.style.opacity = String(0.4 + p * 0.6); pk.style.filter = blurOf(1 - p); }
+    } else if (dy > 0) {
+      const p = Math.min(1, dy / (stage.clientHeight || 600));
+      L.style.transform = `translate3d(0,${dy}px,0) scale(${1 - p * 0.25})`; L.style.opacity = String(1 - p * 0.9);
+    }
+  }
+  function resetSwipe(L, animate) {
+    const pk = V.peek?.el; V.peek = null; if (!L) { pk?.remove(); return; }
+    const tr = "transform .28s cubic-bezier(.2,.8,.2,1), opacity .28s ease, filter .28s ease";
+    if (animate) { L.style.transition = tr; if (pk) { pk.style.transition = tr; pk.style.opacity = "0"; pk.style.transform = `translate3d(${(parseFloat(pk.style.transform.slice(12)) || 0) < 0 ? -rel0() : rel0()}px,0,0) scale(.92)`; } }
+    L.style.transform = ""; L.style.opacity = ""; L.style.filter = "";
+    setTimeout(() => { pk?.remove(); L.style.transition = ""; L.style.willChange = ""; }, 300);
+  }
+  function swipeEnd(dx, dy, dt) {
+    const L = V.layer, axis = gest?.axis; if (!L || !axis) return;
+    const W = rel0(); V.swiping = true; setTimeout(() => (V.swiping = false), 300);
+    if (axis === "x") {
+      const dir = dx < 0 ? 1 : -1, n = V.list[V.idx + dir], fast = Math.abs(dx) / Math.max(dt, 1) > 0.45 && Math.abs(dx) > 28;
+      if (n && (Math.abs(dx) > W * 0.22 || fast)) {
+        const pk = V.peek?.el, tr = "transform .26s cubic-bezier(.2,.8,.2,1), opacity .26s ease, filter .26s ease";
+        L.style.transition = tr; L.style.transform = `translate3d(${-dir * W}px,0,0) scale(.92)`; L.style.opacity = "0"; L.style.filter = blurOf(1);
+        if (pk) { pk.style.transition = tr; pk.style.transform = "translate3d(0,0,0) scale(1)"; pk.style.opacity = "1"; pk.style.filter = "none"; }
+        V.peek = null;
+        setTimeout(() => {
+          if (V.el.hidden) { pk?.remove(); return; }
+          V.skipEnter = true; step(dir);
+          if (pk) { pk.style.transition = "none"; stage.append(pk); const done = () => pk.remove(); V.img?.addEventListener("load", done, { once: true }); setTimeout(done, 400); }
+        }, 255);
+        return;
+      }
+      resetSwipe(L, true);
+    } else if (dy > 110 && dy / Math.max(dt, 1) > -1) { L.style.transition = "transform .2s ease, opacity .2s ease"; L.style.opacity = "0"; setTimeout(() => closeViewer(), 160); }
+    else resetSwipe(L, true);
+    stage.classList.remove("dragging");
+  }
+
   const ptrs = new Map(); let gest = null, lastTap = null, lastType = "mouse", tapTimer = 0, wheelT = 0;
   const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
   stage.addEventListener("pointerdown", (e) => {
-    lastType = e.pointerType; if (!V.img) return;
+    lastType = e.pointerType; if (!V.img || V.swiping) return;
     try { stage.setPointerCapture(e.pointerId); } catch { /* ignore */ }
     ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (ptrs.size === 1) gest = { x0: e.clientX, y0: e.clientY, t0: Date.now(), zx: V.Z.x, zy: V.Z.y, moved: false };
@@ -1040,6 +1093,7 @@
     }
     const dx = e.clientX - gest.x0, dy = e.clientY - gest.y0;
     if (Math.abs(dx) + Math.abs(dy) > 8) gest.moved = true;
+    if (e.pointerType !== "mouse" && V.Z.s < 1.02 && gest.moved && !gest.afterPinch) { swipeMove(dx, dy); return; }
     if (V.Z.s > 1.02 && gest.moved) { stage.classList.add("dragging"); V.Z.x = gest.zx + dx; V.Z.y = gest.zy + dy; clampPan(); applyZ(); }
   });
   const endPtr = (e) => {
@@ -1051,10 +1105,7 @@
       if (V.Z.s < 1.06) zoomTo(1, 0, 0);
     } else if (was === 1 && g) {
       const dx = e.clientX - g.x0, dy = e.clientY - g.y0, dt = Date.now() - g.t0;
-      if (e.pointerType !== "mouse" && V.Z.s < 1.02 && g.moved) {
-        if (Math.abs(dx) > 50 && Math.abs(dx) > 1.4 * Math.abs(dy)) step(dx < 0 ? 1 : -1);
-        else if (dy > 90 && dy > 1.4 * Math.abs(dx)) closeViewer();
-      } else if (e.pointerType !== "mouse" && !g.moved && dt < 300) {
+      if (e.pointerType !== "mouse" && V.Z.s < 1.02 && g.moved) swipeEnd(dx, dy, dt); else if (e.pointerType !== "mouse" && !g.moved && dt < 300) {
         const now = Date.now();
         if (lastTap && now - lastTap.t < 320 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 40) {
           clearTimeout(tapTimer); lastTap = null; const [px, py] = rel(e); zoomToggle(px, py);
